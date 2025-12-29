@@ -72,4 +72,8 @@ $current_page = basename($_SERVER['PHP_SELF']);
         <i class="fas fa-key"></i> <span>Change Password</span>
     </a>
 
+    <a href="about.php" class="nav-link <?php echo ($current_page == 'about.php') ? 'active' : ''; ?>">
+        <i class="fas fa-info-circle"></i> <span>About</span>
+    </a>
+
 </nav>
