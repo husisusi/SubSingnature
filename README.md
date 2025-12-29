@@ -1,46 +1,50 @@
-# 🖋️ SubSignature
+# SubSignature
 
-**SubSignature** is a professional, self-hosted HTML email signature generator. It allows organizations to centrally manage, create, and export standardized email signatures using a powerful WYSIWYG editor.
+SubSignature is a lightweight, self-hosted email signature generator built with PHP and SQLite. It was designed to help organizations manage and standardize email signatures without relying on complex database setups or paid cloud services.
 
-![PHP](https://img.shields.io/badge/PHP-7.4%2B-777BB4?style=flat-square&logo=php&logoColor=white)
-![SQLite](https://img.shields.io/badge/SQLite-Database-003B57?style=flat-square&logo=sqlite&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
+The primary focus of this project is privacy and security. The application runs entirely offline within your server environment, meaning no external requests to CDNs (like Cloudflare or Google Fonts) are made by the client. All assets are hosted locally.
 
-## ✨ Features
+## Screenshots
 
-### 🎨 Design & Editing
-- **Jodit Editor Integration:** A feature-rich WYSIWYG editor for creating complex HTML templates effortlessly.
-- **Dynamic Placeholders:** Easily insert variables like `{name}`, `{role}`, `{phone}` into templates.
-- **Live Preview:** See changes in real-time before saving.
+**Login & Dashboard**
+![Generator Interface](https://raw.githubusercontent.com/husisusi/SubSignature/main/public_html/img/SubSignature_screenshot0.png)
 
-### 💾 Data & Export
-- **SQLite Database:** Zero-configuration, file-based storage. No MySQL server required.
-- **CSV Export:** Export user data and signatures to `.csv` for external use (Excel, HR systems).
-- **ZIP Download:** Download all generated signatures as individual HTML files in a single ZIP archive.
+**Signature Generator**
+![User Management](https://raw.githubusercontent.com/husisusi/SubSignature/main/public_html/img/SubSignature_screenshot1.png)
 
-### 👥 User Management
-- **Role-Based Access Control (RBAC):**
-  - **Admin:** Full access to settings, user management, and global exports.
-  - **User:** Access to personal profile and signature generation.
-- **User Dashboard:** Clean interface for users to update their details.
+**Template Editor**
+![Template Editor](https://raw.githubusercontent.com/husisusi/SubSignature/main/public_html/img/SubSignature_screenshot3.png)
 
-### 🛡️ Enterprise-Grade Security
-Built with security in mind based on modern standards:
-- **Brute-Force Protection:** Account lockout after 5 failed login attempts.
-- **Security Headers:** Implements `X-Frame-Options`, `X-XSS-Protection`, and `Strict-Transport-Security`.
-- **Session Security:** Uses `HttpOnly` and `SameSite` cookies.
-- **Audit Logging:** Detailed logs for security events and login attempts in `logs/`.
+**Admin Management**
+![Import Function](https://raw.githubusercontent.com/husisusi/SubSignature/main/public_html/img/SubSignature_screenshot3.png)
 
-## 🚀 Installation
+## Features
 
-### Prerequisites
-- PHP 7.4 or higher
-- PHP Extensions: `sqlite3`, `mbstring`, `zip`, `json`
-- Apache or Nginx Webserver
+* **Self-Hosted & Private:** Runs on your own server. No data is sent to third parties.
+* **Database:** Uses SQLite. No MySQL or PostgreSQL configuration required.
+* **Role-Based Access:**
+    * **Admins:** Can create templates, manage users, view system logs, and import/export data.
+    * **Users:** Can log in and generate their own signatures based on approved templates.
+* **Visual Editor:** Integrated WYSIWYG editor for designing HTML signatures.
+* **Security:** Includes brute-force protection, rate limiting, and comprehensive audit logs.
+* **Data Management:** Support for CSV import and export of user signatures.
 
-### Setup Guide
+## Installation
 
-1. **Clone the Repository**
-   ```bash
-   git clone [https://github.com/husisuis/SubSignature.git](https://github.com/yourusername/SubSignature.git)
-   cd SubSignature
+1.  Upload the files to your web server.
+2.  Ensure the `private_data` folder is located one level above your public web directory (for security reasons) and is writable by the web server.
+3.  Navigate to `install.php` in your browser to initialize the SQLite database and create your admin account.
+4.  Delete `install.php` after the setup is complete.
+
+## Credits & Third-Party Assets
+
+This project makes use of excellent open-source libraries and resources:
+
+* **Jodit Editor:** The template creation interface is powered by the Jodit WYSIWYG editor. It provides a clean and powerful interface for editing HTML directly in the browser.
+* **Free Icons:** User interface icons are provided by FontAwesome (Free tier), hosted locally to ensure privacy compliance.
+
+## Contributing
+
+This project is a work in progress, and I am always looking for ways to improve it.
+
+If you have ideas for new features, find a security issue, or want to improve the code, your help is welcome. Please feel free to open an issue or submit a pull request.
