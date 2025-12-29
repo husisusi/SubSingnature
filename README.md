@@ -6,16 +6,16 @@ The primary focus of this project is privacy and security. The application runs 
 
 ## Screenshots
 
-**Login & Dashboard**
+**Generator Interface**
 ![Generator Interface](https://raw.githubusercontent.com/husisusi/SubSignature/main/public_html/img/SubSignature_screenshot0.png)
 
-**Signature Generator**
+**User Management**
 ![User Management](https://raw.githubusercontent.com/husisusi/SubSignature/main/public_html/img/SubSignature_screenshot1.png)
 
 **Template Editor**
 ![Template Editor](https://raw.githubusercontent.com/husisusi/SubSignature/main/public_html/img/SubSignature_screenshot3.png)
 
-**Admin Management**
+**Import CSV**
 ![Import Function](https://raw.githubusercontent.com/husisusi/SubSignature/main/public_html/img/SubSignature_screenshot3.png)
 
 ## Features
