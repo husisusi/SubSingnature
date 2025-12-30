@@ -1,23 +1,103 @@
 <?php
+
 require_once 'includes/config.php';
 requireAdmin();
 
 $message = '';
 $error = '';
 
-// Security: CSRF Token Check
+// Security: CSRF Token
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 $csrf_token = $_SESSION['csrf_token'];
 
-// --- LOGIC: DELETE TEMPLATE ---
+// ---------------------------------------------------------
+// 1. LOGIC: IMPORT TEMPLATES (NEW FEATURE)
+// ---------------------------------------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['import_templates'])) {
+    
+    // CSRF Check
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        $error = "Security Error: Invalid CSRF Token.";
+    } 
+    // File Check
+    elseif (isset($_FILES['html_files'])) {
+        $uploaded_files = $_FILES['html_files'];
+        $success_count = 0;
+        $error_details = [];
+
+        // Loop through all uploaded files
+        for ($i = 0; $i < count($uploaded_files['name']); $i++) {
+            $filename = $uploaded_files['name'][$i];
+            $tmp_name = $uploaded_files['tmp_name'][$i];
+            $file_size = $uploaded_files['size'][$i];
+            $file_error = $uploaded_files['error'][$i];
+
+            if ($file_error === UPLOAD_ERR_OK) {
+                
+                // A. Validate Extension (Must be .html)
+                $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+                if ($ext !== 'html') {
+                    $error_details[] = "$filename: Only .html files allowed.";
+                    continue;
+                }
+
+                // B. Validate Content (No PHP tags)
+                $content = file_get_contents($tmp_name);
+                if (strpos($content, '<?php') !== false || strpos($content, '<?=') !== false) {
+                    $error_details[] = "$filename: Contains PHP code (Security Violation).";
+                    continue;
+                }
+
+                // C. Sanitize Filename
+                // Remove special chars, ensure lower case
+                $safe_name = preg_replace('/[^a-z0-9_]/', '', strtolower(pathinfo($filename, PATHINFO_FILENAME)));
+                
+                // Enforce prefix 'signature_' if missing
+                if (strpos($safe_name, 'signature_') !== 0) {
+                    $safe_name = 'signature_' . $safe_name;
+                }
+                $final_name = $safe_name . '.html';
+                $target_path = 'templates/' . $final_name;
+
+                // D. Prevent Overwriting
+                if (file_exists($target_path)) {
+                    // Append timestamp to make unique
+                    $final_name = $safe_name . '_' . time() . '.html';
+                    $target_path = 'templates/' . $final_name;
+                }
+
+                // E. Move File
+                if (move_uploaded_file($tmp_name, $target_path)) {
+                    $success_count++;
+                } else {
+                    $error_details[] = "$filename: Failed to move file.";
+                }
+
+            } else {
+                if ($file_error !== UPLOAD_ERR_NO_FILE) {
+                    $error_details[] = "Error uploading file #$i";
+                }
+            }
+        }
+
+        if ($success_count > 0) {
+            $message = "Successfully imported $success_count template(s).";
+        }
+        if (!empty($error_details)) {
+            $error = implode('<br>', $error_details);
+        }
+    }
+}
+
+// ---------------------------------------------------------
+// 2. LOGIC: DELETE TEMPLATE
+// ---------------------------------------------------------
 if (isset($_GET['delete'])) {
-    // 1. Verify Token
     if (!isset($_GET['token']) || !hash_equals($_SESSION['csrf_token'], $_GET['token'])) {
         $error = "Security Error: Invalid Token.";
     } else {
-        // 2. Sanitize Input
         $template = basename($_GET['delete']); // Prevent Directory Traversal
         $template_path = 'templates/' . $template;
         
@@ -33,23 +113,22 @@ if (isset($_GET['delete'])) {
             $error = "Template not found!";
         }
     }
-    // Clean Redirect to remove query params
-    if ($error) header('Location: admin_templates.php?error=' . urlencode($error));
-    else header('Location: admin_templates.php?message=' . urlencode($message));
+    // Clean Redirect
+    $param = $error ? 'error='.urlencode($error) : 'message='.urlencode($message);
+    header('Location: admin_templates.php?' . $param);
     exit;
 }
 
-// --- LOGIC: RENAME TEMPLATE ---
+// ---------------------------------------------------------
+// 3. LOGIC: RENAME TEMPLATE
+// ---------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rename_template'])) {
-    // 1. Verify Token
     if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
         $error = "Security Error: Invalid Token.";
     } else {
-        // 2. Sanitize Input
         $old_name = basename($_POST['old_name']);
         $new_name = trim($_POST['new_name']);
         
-        // 3. Validation
         if (empty($new_name)) {
             $error = "New name is required!";
         } elseif (!preg_match('/^signature_[a-z0-9_]+\.html$/i', $new_name)) {
@@ -58,15 +137,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rename_template'])) {
             $old_path = 'templates/' . $old_name;
             $new_path = 'templates/' . $new_name;
             
-            if (!file_exists($old_path)) {
-                $error = "Original file not found!";
-            } elseif (file_exists($new_path)) {
-                $error = "A template with this name already exists!";
-            } elseif (rename($old_path, $new_path)) {
+            if (!file_exists($old_path)) $error = "Original file not found!";
+            elseif (file_exists($new_path)) $error = "Name already exists!";
+            elseif (rename($old_path, $new_path)) {
                 $message = "Template renamed successfully.";
-                
-                // 4. Update Database References
-                // Ensures users using the old template are migrated to the new name
                 $stmt = $db->prepare("UPDATE user_signatures SET template = ? WHERE template = ?");
                 $stmt->bindValue(1, $new_name, SQLITE3_TEXT);
                 $stmt->bindValue(2, $old_name, SQLITE3_TEXT);
@@ -78,19 +152,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rename_template'])) {
     }
 }
 
-// --- LOAD DATA ---
+// ---------------------------------------------------------
+// 4. LOAD DATA
+// ---------------------------------------------------------
 $templates = [];
-// Security: glob() is safe here as it only reads the specific directory
 $template_files = glob('templates/*.html');
 
 if ($template_files) {
     foreach ($template_files as $file) {
         $filename = basename($file);
-        $content = file_get_contents($file);
         $size = filesize($file);
         $modified = filemtime($file);
         
-        // Count usage in DB
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM user_signatures WHERE template = ?");
         $stmt->bindValue(1, $filename, SQLITE3_TEXT);
         $result = $stmt->execute();
@@ -106,11 +179,9 @@ if ($template_files) {
     }
 }
 
-// Sort by usage (most used first)
 usort($templates, function($a, $b) { return $b['usage'] - $a['usage']; });
 $default_template = 'signature_default.html';
 
-// Capture messages from redirect
 if (isset($_GET['message'])) $message = $_GET['message'];
 if (isset($_GET['error'])) $error = $_GET['error'];
 ?>
@@ -130,6 +201,16 @@ if (isset($_GET['error'])) $error = $_GET['error'];
         .badge-default { background: #ffedd5; color: #9a3412; }
         .badge-active { background: #dcfce7; color: #166534; }
         .badge-unused { background: #f1f5f9; color: #64748b; }
+        
+        /* Modal Styles */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.5); display: none; justify-content: center; align-items: center; z-index: 1000; backdrop-filter: blur(2px); }
+        .modal-box { background: white; width: 90%; max-width: 500px; padding: 2rem; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); position: relative; }
+        .modal-header h3 { margin: 0; color: var(--text-main); font-size: 1.25rem; }
+        .modal-close { position: absolute; top: 1rem; right: 1rem; cursor: pointer; color: var(--text-muted); font-size: 1.2rem; }
+        
+        .upload-area { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 2rem; text-align: center; cursor: pointer; transition: all 0.2s; background: #f8fafc; position: relative; }
+        .upload-area:hover { border-color: var(--primary); background: #eff6ff; }
+        .upload-input { position: absolute; width: 100%; height: 100%; top: 0; left: 0; opacity: 0; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -139,17 +220,13 @@ if (isset($_GET['error'])) $error = $_GET['error'];
         
         <div class="sidebar-footer">
             <div class="user-profile">
-                <div class="avatar">
-                    <?php echo strtoupper(substr($_SESSION['username'], 0, 1)); ?>
-                </div>
+                <div class="avatar"><?php echo strtoupper(substr($_SESSION['username'], 0, 1)); ?></div>
                 <div class="user-info">
                     <div><?php echo htmlspecialchars($_SESSION['username']); ?></div>
-                    <span><?php echo isAdmin() ? 'Administrator' : 'User'; ?></span>
+                    <span>Administrator</span>
                 </div>
             </div>
-            <a href="logout.php" class="btn-logout">
-                <i class="fas fa-sign-out-alt"></i> <span>Sign Out</span>
-            </a>
+            <a href="logout.php" class="btn-logout"><i class="fas fa-sign-out-alt"></i> <span>Sign Out</span></a>
         </div>
     </aside>
 
@@ -161,15 +238,10 @@ if (isset($_GET['error'])) $error = $_GET['error'];
         </header>
 
         <?php if ($message): ?>
-            <div class="alert alert-success">
-                <i class="fas fa-check-circle"></i> <?php echo htmlspecialchars($message); ?>
-            </div>
+            <div class="alert alert-success"><i class="fas fa-check-circle"></i> <?php echo htmlspecialchars($message); ?></div>
         <?php endif; ?>
-        
         <?php if ($error): ?>
-            <div class="alert alert-error">
-                <i class="fas fa-exclamation-circle"></i> <?php echo htmlspecialchars($error); ?>
-            </div>
+            <div class="alert alert-error"><i class="fas fa-exclamation-circle"></i> <?php echo $error; // Allow HTML for list breaks ?></div>
         <?php endif; ?>
 
         <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 2rem;">
@@ -187,6 +259,10 @@ if (isset($_GET['error'])) $error = $_GET['error'];
             <div class="card-header">
                 <h3><i class="fas fa-list"></i> Installed Templates</h3>
                 <div style="display:flex; gap: 0.5rem;">
+                    <button onclick="openImportModal()" class="btn btn-sm btn-success">
+                        <i class="fas fa-file-import"></i> Import HTML
+                    </button>
+                    
                     <a href="template_editor.php" class="btn btn-sm btn-primary">
                         <i class="fas fa-plus"></i> New
                     </a>
@@ -214,17 +290,12 @@ if (isset($_GET['error'])) $error = $_GET['error'];
                             
                             <td style="padding: 1rem;">
                                 <?php 
-                                    // 1. Show 'Default' Badge if applicable
                                     if ($t['filename'] === $default_template) {
                                         echo '<span class="template-badge badge-default">Default</span>';
                                     }
-                                    
-                                    // 2. Show 'Users' Badge if used (regardless if default or not)
                                     if ($t['usage'] > 0) {
                                         echo '<span class="template-badge badge-active">' . $t['usage'] . ' Users</span>';
-                                    } 
-                                    // 3. Only show 'Unused' if NOT default AND NOT used
-                                    elseif ($t['filename'] !== $default_template) {
+                                    } elseif ($t['filename'] !== $default_template) {
                                         echo '<span class="template-badge badge-unused">Unused</span>';
                                     }
                                 ?>
@@ -232,25 +303,12 @@ if (isset($_GET['error'])) $error = $_GET['error'];
                             
                             <td style="padding: 1rem; text-align: right;">
                                 <div style="display: inline-flex; gap: 0.5rem;">
-                                    <a href="template_editor.php?edit=<?php echo urlencode($t['filename']); ?>" class="btn btn-sm btn-primary" title="Edit">
-                                        <i class="fas fa-pen"></i>
-                                    </a>
-                                    
-                                    <a href="preview_template.php?template=<?php echo urlencode($t['filename']); ?>" target="_blank" class="btn btn-sm btn-secondary" title="Preview">
-                                        <i class="fas fa-eye"></i>
-                                    </a>
-                                    
-                                    <button type="button" onclick="toggleRename('<?php echo md5($t['filename']); ?>')" class="btn btn-sm btn-secondary" title="Rename">
-                                        <i class="fas fa-i-cursor"></i>
-                                    </button>
+                                    <a href="template_editor.php?edit=<?php echo urlencode($t['filename']); ?>" class="btn btn-sm btn-primary" title="Edit"><i class="fas fa-pen"></i></a>
+                                    <a href="preview_template.php?template=<?php echo urlencode($t['filename']); ?>" target="_blank" class="btn btn-sm btn-secondary" title="Preview"><i class="fas fa-eye"></i></a>
+                                    <button type="button" onclick="toggleRename('<?php echo md5($t['filename']); ?>')" class="btn btn-sm btn-secondary" title="Rename"><i class="fas fa-i-cursor"></i></button>
                                     
                                     <?php if ($t['filename'] !== $default_template): ?>
-                                        <a href="admin_templates.php?delete=<?php echo urlencode($t['filename']); ?>&token=<?php echo $csrf_token; ?>" 
-                                           class="btn btn-sm btn-danger" 
-                                           onclick="return confirm('Really delete?')" 
-                                           title="Delete">
-                                            <i class="fas fa-trash"></i>
-                                        </a>
+                                        <a href="admin_templates.php?delete=<?php echo urlencode($t['filename']); ?>&token=<?php echo $csrf_token; ?>" class="btn btn-sm btn-danger" onclick="return confirm('Really delete?')" title="Delete"><i class="fas fa-trash"></i></a>
                                     <?php endif; ?>
                                 </div>
                             </td>
@@ -261,10 +319,8 @@ if (isset($_GET['error'])) $error = $_GET['error'];
                                 <form method="POST" class="inline-form">
                                     <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>">
                                     <input type="hidden" name="old_name" value="<?php echo htmlspecialchars($t['filename']); ?>">
-                                    
                                     <span>Rename to:</span>
                                     <input type="text" name="new_name" value="<?php echo htmlspecialchars($t['filename']); ?>" required style="padding: 5px; border: 1px solid #e2e8f0; border-radius: 4px;">
-                                    
                                     <button type="submit" name="rename_template" class="btn btn-sm btn-primary">Save</button>
                                     <button type="button" onclick="toggleRename('<?php echo md5($t['filename']); ?>')" class="btn btn-sm btn-secondary">Cancel</button>
                                 </form>
@@ -278,25 +334,93 @@ if (isset($_GET['error'])) $error = $_GET['error'];
 
     </main>
 
+    <div id="importModal" class="modal-overlay">
+        <div class="modal-box">
+            <span class="modal-close" onclick="closeImportModal()">&times;</span>
+            <div class="modal-header">
+                <h3><i class="fas fa-cloud-upload-alt" style="color:var(--primary);"></i> Import Templates</h3>
+                <p style="color:var(--text-muted); font-size:0.9rem; margin-top:0.5rem;">
+                    Upload new HTML templates. Only <code>.html</code> files allowed.
+                </p>
+            </div>
+            
+            <form method="POST" enctype="multipart/form-data">
+                <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>">
+                <input type="hidden" name="import_templates" value="1">
+                
+                <div class="upload-area" id="dropZone">
+                    <input type="file" name="html_files[]" class="upload-input" accept=".html" multiple required onchange="showFileCount(this)">
+                    <i class="fas fa-file-code" style="font-size: 2.5rem; color: #cbd5e1; margin-bottom: 1rem;"></i>
+                    <div id="uploadText" style="font-weight: 500; color: var(--text-main);">
+                        Click to select or drag & drop files
+                    </div>
+                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">
+                        Files will be renamed to <code>signature_*.html</code>
+                    </div>
+                </div>
+                
+                <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top: 1.5rem;">
+                    <button type="button" class="btn btn-danger" style="background:white; color:var(--text-main); border:1px solid var(--border);" onclick="closeImportModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Start Import</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
+    // --- Rename Toggle ---
     function toggleRename(id) {
-        // Hide all other rename rows
         document.querySelectorAll('.rename-row').forEach(el => el.style.display = 'none');
-        
-        // Toggle current row
         const row = document.getElementById('rename-' + id);
-        if (row.style.display === 'none' || row.style.display === '') {
-            row.style.display = 'table-row';
+        row.style.display = (row.style.display === 'none' || row.style.display === '') ? 'table-row' : 'none';
+    }
+    
+    // --- Modal Logic ---
+    const modal = document.getElementById('importModal');
+    function openImportModal() { modal.style.display = 'flex'; }
+    function closeImportModal() { modal.style.display = 'none'; }
+    window.onclick = function(event) { if (event.target == modal) closeImportModal(); }
+
+    // --- File Input Visuals ---
+    function showFileCount(input) {
+        const text = document.getElementById('uploadText');
+        if (input.files && input.files.length > 0) {
+            text.innerHTML = `<strong>${input.files.length}</strong> file(s) selected`;
+            text.style.color = '#166534';
         } else {
-            row.style.display = 'none';
+            text.innerHTML = 'Click to select or drag & drop files';
+            text.style.color = 'var(--text-main)';
         }
     }
     
+    // --- Drag & Drop Visuals ---
+    const dropZone = document.getElementById('dropZone');
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = 'var(--primary)';
+        dropZone.style.background = '#eff6ff';
+    });
+    dropZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = '#cbd5e1';
+        dropZone.style.background = '#f8fafc';
+    });
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = '#166534'; // Success green
+        dropZone.style.background = '#f0fdf4';
+        
+        // Pass dropped files to input
+        const input = dropZone.querySelector('input');
+        input.files = e.dataTransfer.files;
+        showFileCount(input);
+    });
+
     // Auto-hide alerts
     setTimeout(() => {
         const alerts = document.querySelectorAll('.alert');
         alerts.forEach(el => el.style.display = 'none');
-    }, 4000);
+    }, 5000);
     </script>
 </body>
 </html>
