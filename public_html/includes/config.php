@@ -53,12 +53,38 @@ header("Referrer-Policy: strict-origin-when-cross-origin");
 header("Permissions-Policy: geolocation=(), microphone=(), camera=()"); // Added for extra security
 
 // ---------------------------------------------------------------------
-// 4. DATABASE CONNECTION
+// 4. DATABASE CONNECTION (ROBUST & SECURE)
 // ---------------------------------------------------------------------
+// PRE-CHECK: Permissions (Prevents generic "System Error" on install)
+$db_folder = dirname(DB_PATH);
+
+// 1. Check if directory exists
+if (!is_dir($db_folder)) {
+    // Try to create it (if missing)
+    if (!mkdir($db_folder, 0755, true)) {
+        // Security: Show simple error to user, details in log
+        error_log("CRITICAL: Database directory missing and cannot be created: " . $db_folder);
+        die("Setup Error: The private data directory is missing and could not be created.");
+    }
+}
+
+// 2. Check if directory is writable
+if (!is_writable($db_folder)) {
+    // Explicit error for Admin/Installer to fix permissions
+    die("CRITICAL ERROR: Permission Denied.<br>The web server needs <strong>WRITE</strong> permissions for the directory:<br><code>" . htmlspecialchars($db_folder) . "</code><br><br>Please adjust permissions (e.g. <code>chmod 700</code>) and ownership.");
+}
+
+// 3. Check if database file is writable (if it exists)
+if (file_exists(DB_PATH) && !is_writable(DB_PATH)) {
+    die("CRITICAL ERROR: The database file exists but is not writable.<br>File: " . htmlspecialchars(DB_PATH));
+}
+
 try {
     $db = new SQLite3(DB_PATH);
     $db->busyTimeout(5000);
     $db->exec('PRAGMA foreign_keys = ON');
+    // Optional: Performance Boost for SQLite
+    $db->exec('PRAGMA journal_mode = WAL;'); 
 } catch (Exception $e) {
     error_log("Database Connection Error: " . $e->getMessage());
     die("System Error. Please check server logs.");
