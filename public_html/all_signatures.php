@@ -185,7 +185,7 @@ if (isset($_GET['ajax'])) {
     exit;
 }
 
-// 6. DELETE LOGIC (The critical part)
+// 6. DELETE LOGIC
 if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['delete'])) {
     $token = $_POST['csrf_token'] ?? $_GET['csrf_token'] ?? '';
     if (!hash_equals($_SESSION['csrf_token'], $token)) die("Security Error: Invalid CSRF Token");
@@ -215,7 +215,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['delete'])) {
         
         if ($target_user_id === 'all') {
             // ADMIN MODE: DELETE EVERYTHING FROM DB
-            // (Ignoring search filter to be robust and prevent alias SQL errors)
             if (!$is_admin) die("Unauthorized"); // Extra check
             
             $stmtDel = $db->prepare("DELETE FROM user_signatures");
@@ -254,8 +253,45 @@ if (isset($_GET['success'])) {
         .sig-preview-container { display: none; margin-top: 1rem; border: 1px dashed #e2e8f0; background: #f8fafc; padding: 10px; border-radius: 8px; width: 100%; }
         .preview-iframe { width: 100%; height: 180px; border: none; background: white; border-radius: 4px; }
         .filter-bar { background: white; padding: 1rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
-        .user-select { padding: 0.6rem; border: 1px solid #cbd5e1; border-radius: 6px; min-width: 200px; font-weight: 500; }
-        .search-input { flex: 1; padding: 0.6rem; border: 1px solid #cbd5e1; border-radius: 6px; }
+        
+        /* MODERN SELECT STYLE */
+        .user-select {
+            padding: 0.6rem 2rem 0.6rem 0.8rem; /* Platz rechts für Pfeil */
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            min-width: 200px;
+            font-weight: 500;
+            background-color: white; /* Weißer Hintergrund */
+            color: #334155;
+            font-size: 0.95rem;
+            cursor: pointer;
+            
+            /* Custom Arrow */
+            appearance: none; /* Standard Browser Styling entfernen */
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 0.7rem center;
+            background-size: 1em;
+            
+            transition: all 0.2s ease;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+
+        .user-select:hover {
+            border-color: #cbd5e1;
+        }
+
+        .user-select:focus {
+            outline: none;
+            border-color: var(--primary); /* Nutzt deine Primärfarbe */
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        .search-input { flex: 1; padding: 0.6rem; border: 1px solid #e2e8f0; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        .search-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+        
         .count-badge { background-color: #eff6ff; color: #2563eb; font-size: 0.9rem; padding: 0.3rem 0.8rem; border-radius: 999px; font-weight: 700; margin-left: 10px; border: 1px solid #dbeafe; vertical-align: middle; }
         .infinite-spinner { text-align: center; padding: 2rem; display: none; color: var(--text-muted); }
         #sentinel { height: 20px; width: 100%; }
@@ -320,7 +356,7 @@ if (isset($_GET['success'])) {
                     <?php if ($is_admin): ?>
                     <div style="flex-shrink:0;">
                         <select name="user_id" class="user-select" onchange="this.form.submit()">
-                            <option value="all" <?php echo ($target_user_id === 'all') ? 'selected' : ''; ?>>-- All Users --</option>
+                            <option value="all" <?php echo ($target_user_id === 'all') ? 'selected' : ''; ?>>All Users</option>
                             <?php foreach ($users_list as $u): ?>
                                 <option value="<?php echo $u['id']; ?>" <?php echo ($u['id'] == $target_user_id) ? 'selected' : ''; ?>>
                                     <?php echo htmlspecialchars($u['username']); ?> 
