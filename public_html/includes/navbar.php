@@ -56,6 +56,10 @@ $current_page = basename($_SERVER['PHP_SELF']);
         <i class="fas fa-users"></i> <span>Users</span>
     </a>
 
+    <a href="admin_config.php" class="nav-link <?php echo ($current_page == 'admin_config.php') ? 'active' : ''; ?>">
+        <i class="fas fa-cog"></i> <span>System Configuration</span>
+    </a>
+
     <a href="admin_logs.php" class="nav-link <?php echo ($current_page == 'admin_logs.php') ? 'active' : ''; ?>">
         <i class="fas fa-history"></i> <span>System Logs</span>
     </a>
