@@ -6,6 +6,10 @@
   SubSignature
 </h1>
 
+![PHP](https://img.shields.io/badge/PHP-7.4%2B-777BB4?style=flat-square&logo=php&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-Database-003B57?style=flat-square&logo=sqlite&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
+
 SubSignature is a lightweight, self-hosted email signature generator built with PHP and SQLite. It was designed to help organizations manage and standardize email signatures without relying on complex database setups or paid cloud services.
 
 The primary focus of this project is privacy and security. The application runs entirely offline within your server environment, meaning no external requests to CDNs (like Cloudflare or Google Fonts) are made by the client. All assets are hosted locally.
