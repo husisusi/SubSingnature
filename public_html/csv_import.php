@@ -1,4 +1,12 @@
 <?php
+/**
+ * CSV Import Script
+ * Security Prio 1:
+ * - Admin checks
+ * - CSRF Protection
+ * - Input Sanitization
+ * - File Validation
+ */
 
 require_once 'includes/config.php';
 requireLogin();
@@ -25,7 +33,7 @@ if ($is_admin) {
     }
 }
 
-// Load Templates (Secure Glob)
+// Load Templates (Secure Glob - preventing path traversal)
 $templates = [];
 $template_files = glob('templates/*.html');
 foreach ($template_files as $file) {
@@ -127,7 +135,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             // Sanitizer Closure
                             $sanitizeCSV = function($str) {
                                 $str = trim($str ?? '');
-                                // Prevent Formula Injection
+                                // Prevent Formula Injection (CSV Injection)
                                 if (preg_match('/^[=\+\-@]/', $str)) return "'" . $str;
                                 return htmlspecialchars($str, ENT_QUOTES, 'UTF-8');
                             };
@@ -277,10 +285,7 @@ $csrf_token = generateCSRFToken();
                 </div>
             </div>
             <a href="logout.php" class="btn-logout"><i class="fas fa-sign-out-alt"></i> <span>Sign Out</span></a>
-            <div style="text-align: center; margin-top: 0.75rem; font-size: 0.7rem; color: #94a3b8;">
-                SubSignature <a href="about.php" style="color: inherit; text-decoration: none; font-weight: 600;">v1.0.1</a>
             </div>
-        </div>
     </aside>
 
     <main class="main-content">
