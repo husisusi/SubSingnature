@@ -1,5 +1,10 @@
-![SubSignature Logo](https://raw.githubusercontent.com/husisusi/SubSignature/main/public_html/img/subsig_logo.png)
-# SubSignature
+<h1>
+  <img src="https://raw.githubusercontent.com/husisusi/SubSignature/main/public_html/img/subsig_logo.png"
+       alt="SubSignature Logo"
+       height="100"
+       style="vertical-align: middle;">
+  SubSignature
+</h1>
 
 SubSignature is a lightweight, self-hosted email signature generator built with PHP and SQLite. It was designed to help organizations manage and standardize email signatures without relying on complex database setups or paid cloud services.
 
