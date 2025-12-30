@@ -5,28 +5,20 @@
 require_once 'includes/config.php';
 
 // 2. Determine Context: Is this an Admin creating a user?
-// We strictly check the session role to prevent privilege escalation.
 $is_admin_session = (isset($_SESSION['role']) && $_SESSION['role'] === 'admin');
 $admin_create_mode = (isset($_GET['admin']) && $_GET['admin'] == 1);
-
-// Only allow admin mode if the user is actually an admin
 $admin_create = $is_admin_session && $admin_create_mode;
 
 // 3. Security: Access Control
-// If a user is logged in but NOT an admin, they should not see the public registration page
-// (redirect to dashboard) nor the admin creation page.
 if (isLoggedIn() && !$is_admin_session) {
     header('Location: generator.php');
     exit;
 }
 
 // 4. Rate Limiting (Public Registration Only)
-// Protects against bot spam and brute-force account creation.
 if (!$is_admin_session) {
-    // Ensure the function exists, otherwise deny access for security default
     if (function_exists('checkRateLimit')) {
         if (!checkRateLimit('registration', 5, 900)) {  
-            // 429 Too Many Requests
             http_response_code(429);  
             die("Security Warning: Too many registration attempts. Please try again later.");
         }
@@ -37,6 +29,22 @@ if (!$is_admin_session) {
 header('X-Frame-Options: DENY');
 header('X-Content-Type-Options: nosniff');
 
+// --- LOAD SYSTEM CONFIGURATION ---
+// Default: 1 (Active) if nothing is set in DB yet
+$config_default_active = 1; 
+
+// Check if table exists (safe fallback)
+$checkTable = $db->query("SELECT name FROM sqlite_master WHERE type='table' AND name='system_settings'");
+if ($checkTable->fetchArray()) {
+    $stmtCfg = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'default_user_active'");
+    $resCfg = $stmtCfg->execute();
+    $rowCfg = $resCfg->fetchArray(SQLITE3_ASSOC);
+    if ($rowCfg) {
+        $config_default_active = (int)$rowCfg['setting_value'];
+    }
+}
+// --------------------------------
+
 $error = '';
 $success = '';
 $username = '';
@@ -45,14 +53,14 @@ $full_name = '';
 
 // 5. Form Processing
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // CSRF Protection
+    // CSRF Protection (Security Prio 1)
     if (empty($_POST['csrf_token']) || empty($_SESSION['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
         die("Security Error: Invalid CSRF token. Please refresh the page.");
     }
 
     // Input Sanitization
     $username = trim($_POST['username'] ?? '');
-    $password = $_POST['password'] ?? ''; // Don't trim passwords
+    $password = $_POST['password'] ?? ''; 
     $confirm_password = $_POST['confirm_password'] ?? '';
     $email = trim($_POST['email'] ?? '');
     $full_name = trim($_POST['full_name'] ?? '');
@@ -75,7 +83,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Database Interaction
     if (empty($error)) {
         try {
-            // Check availability using Prepared Statement
             $stmt = $db->prepare("SELECT count(*) as count FROM users WHERE username = ? OR (email = ? AND email != '')");
             $stmt->bindValue(1, $username, SQLITE3_TEXT);
             $stmt->bindValue(2, $email, SQLITE3_TEXT);
@@ -83,26 +90,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $row = $result->fetchArray(SQLITE3_ASSOC);
             
             if ($row['count'] > 0) {
-                // Delay response slightly to mitigate timing attacks (User Enumeration)
+                // Anti-Timing Attack
                 usleep(rand(100000, 300000));  
                 $error = "Username or Email already exists.";
             } else {
-                // Hash Password Securely
                 $password_hash = password_hash($password, PASSWORD_DEFAULT);
                 
-                // Determine Account Status
-                // Default: Inactive (0) for public registration
-                $is_active = 0;  
+                // --- FIX: DETERMINE ACCOUNT STATUS ---
+                $is_active = 0;
                 
-                // If Admin creates user: Default to Active (1), or use selection
                 if ($admin_create) {
-                    $is_active = isset($_POST['user_status']) ? (int)$_POST['user_status'] : 1;
+                    // Admin: Use dropdown value (fallback to config)
+                    $is_active = isset($_POST['user_status']) ? (int)$_POST['user_status'] : $config_default_active;
+                } else {
+                    // Public: Use System Configuration directly!
+                    // Previously this was hardcoded to 0.
+                    $is_active = $config_default_active;
                 }
                 
-                // Transaction for Data Integrity
                 $db->exec('BEGIN');
 
-                // 1. Insert User
                 $stmt = $db->prepare("INSERT INTO users (username, password_hash, email, full_name, role, is_active, created_at)  
                                       VALUES (?, ?, ?, ?, 'user', ?, datetime('now'))");
                 $stmt->bindValue(1, $username, SQLITE3_TEXT);
@@ -114,21 +121,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($stmt->execute()) {
                     $user_id = $db->lastInsertRowID();
                     
-                    // 2. Create default settings entry (Now using Prepared Statement for consistency)
                     $stmtSettings = $db->prepare("INSERT INTO user_settings (user_id) VALUES (?)");
                     $stmtSettings->bindValue(1, $user_id, SQLITE3_INTEGER);
                     $stmtSettings->execute();
                     
-                    $db->exec('COMMIT'); // Commit changes
+                    $db->exec('COMMIT');
                     
+                    // --- FIX: DYNAMIC SUCCESS MESSAGE ---
                     if ($admin_create) {
                         $success = "User " . htmlspecialchars($username, ENT_QUOTES, 'UTF-8') . " created successfully.";
                     } else {
-                        // Public message: Must wait for approval
-                        $success = "Account created! Please wait for administrator approval.";
+                        if ($is_active == 1) {
+                            $success = "Account created! You can log in immediately.";
+                        } else {
+                            $success = "Account created! Please wait for administrator approval.";
+                        }
                     }
                     
-                    // Clear fields on success
+                    // Clear form
                     $username = $email = $full_name = '';
                     
                 } else {
@@ -137,16 +147,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
         } catch (Exception $e) {
-            // Rollback if transaction is active
             $db->exec('ROLLBACK');
-            // Log the actual error internally, show generic error to user
             error_log("Registration error: " . $e->getMessage());
             $error = "System error occurred. Please try again.";
         }
     }
 }
 
-// Generate new CSRF Token if none exists
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
@@ -163,7 +170,6 @@ $csrf_token = $_SESSION['csrf_token'];
     <link rel="stylesheet" href="css/all.min.css">    
     
     <style>
-        /* Styles remain exactly as in original */
         .register-body {
             background: linear-gradient(135deg, #f5f7fa 0%, #e4edf5 100%);
             min-height: 100vh;
@@ -190,25 +196,12 @@ $csrf_token = $_SESSION['csrf_token'];
             margin-top: 0.5rem;
             overflow: hidden;
         }
-        .strength-fill {
-            height: 100%;
-            width: 0%;
-            transition: all 0.3s;
-        }
-        .strength-text {
-            font-size: 0.75rem;
-            margin-top: 0.25rem;
-            text-align: right;
-        }
+        .strength-fill { height: 100%; width: 0%; transition: all 0.3s; }
+        .strength-text { font-size: 0.75rem; margin-top: 0.25rem; text-align: right; }
 
         .password-group { position: relative; }
         .toggle-password {
-            position: absolute;
-            right: 12px;
-            top: 42px;
-            color: #94a3b8;
-            cursor: pointer;
-            z-index: 10;
+            position: absolute; right: 12px; top: 42px; color: #94a3b8; cursor: pointer; z-index: 10;
         }
         .toggle-password:hover { color: var(--primary); }
 
@@ -228,7 +221,6 @@ $csrf_token = $_SESSION['csrf_token'];
 
     <?php if ($admin_create): ?>
         <aside class="sidebar">
-            
             <?php include 'includes/navbar.php'; ?>
             <div class="sidebar-footer">
                 <div class="user-profile">
@@ -294,8 +286,8 @@ $csrf_token = $_SESSION['csrf_token'];
                     <div class="form-group" style="margin-bottom:0;">
                         <label for="user_status">Initial Account Status</label>
                         <select name="user_status" id="user_status" style="width:100%; padding:0.6rem; border:1px solid var(--border); border-radius:6px;">
-                            <option value="1" selected>Active (Can login immediately)</option>
-                            <option value="0">Inactive (Requires activation)</option>
+                            <option value="1" <?php echo ($config_default_active == 1) ? 'selected' : ''; ?>>Active (Can login immediately)</option>
+                            <option value="0" <?php echo ($config_default_active == 0) ? 'selected' : ''; ?>>Inactive (Requires activation)</option>
                         </select>
                     </div>
                 </div>
@@ -368,16 +360,10 @@ $csrf_token = $_SESSION['csrf_token'];
         const input = document.getElementById(id);
         const type = input.type === 'password' ? 'text' : 'password';
         input.type = type;
-        
         const icon = input.parentElement.querySelector('.toggle-password');
         if (icon) {
-            if (type === 'text') {
-                icon.classList.remove('fa-eye');
-                icon.classList.add('fa-eye-slash');
-            } else {
-                icon.classList.remove('fa-eye-slash');
-                icon.classList.add('fa-eye');
-            }
+            if (type === 'text') { icon.classList.remove('fa-eye'); icon.classList.add('fa-eye-slash'); } 
+            else { icon.classList.remove('fa-eye-slash'); icon.classList.add('fa-eye'); }
         }
     }
 
@@ -392,23 +378,10 @@ $csrf_token = $_SESSION['csrf_token'];
         if (password.match(/[^a-zA-Z\d]/)) strength += 1;
 
         switch(strength) {
-            case 0:
-            case 1:
-                bar.style.width = '25%'; bar.style.backgroundColor = '#ef4444';
-                text.textContent = 'Weak'; text.style.color = '#ef4444';
-                break;
-            case 2:
-                bar.style.width = '50%'; bar.style.backgroundColor = '#f59e0b';
-                text.textContent = 'Fair'; text.style.color = '#f59e0b';
-                break;
-            case 3:
-                bar.style.width = '75%'; bar.style.backgroundColor = '#3b82f6';
-                text.textContent = 'Good'; text.style.color = '#3b82f6';
-                break;
-            case 4:
-                bar.style.width = '100%'; bar.style.backgroundColor = '#10b981';
-                text.textContent = 'Strong'; text.style.color = '#10b981';
-                break;
+            case 0: case 1: bar.style.width = '25%'; bar.style.backgroundColor = '#ef4444'; text.textContent = 'Weak'; text.style.color = '#ef4444'; break;
+            case 2: bar.style.width = '50%'; bar.style.backgroundColor = '#f59e0b'; text.textContent = 'Fair'; text.style.color = '#f59e0b'; break;
+            case 3: bar.style.width = '75%'; bar.style.backgroundColor = '#3b82f6'; text.textContent = 'Good'; text.style.color = '#3b82f6'; break;
+            case 4: bar.style.width = '100%'; bar.style.backgroundColor = '#10b981'; text.textContent = 'Strong'; text.style.color = '#10b981'; break;
         }
     }
 
@@ -417,10 +390,7 @@ $csrf_token = $_SESSION['csrf_token'];
         form.addEventListener('submit', function(e) {
             const p1 = document.getElementById('password').value;
             const p2 = document.getElementById('confirm_password').value;
-            if (p1 !== p2) {
-                e.preventDefault();
-                alert('Passwords do not match!');
-            }
+            if (p1 !== p2) { e.preventDefault(); alert('Passwords do not match!'); }
         });
     }
     </script>
