@@ -39,7 +39,7 @@ $current_content = '<!DOCTYPE html>
 $current_file = ''; 
 
 // ---------------------------------------------------------------------
-// 2. Handle POST Request
+// 2. Handle POST Request (Save)
 // ---------------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
@@ -106,13 +106,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ---------------------------------------------------------------------
-// 3. Load Existing Templates
+// 3. Load Existing Templates List
 // ---------------------------------------------------------------------
 $templates = [];
 $template_files = glob('templates/*.html');
 if ($template_files) {
     foreach ($template_files as $file) {
         $templates[basename($file)] = file_get_contents($file);
+    }
+}
+
+// ---------------------------------------------------------------------
+// 4. HANDLE GET REQUEST (FIX: Load template for editing)
+// ---------------------------------------------------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
+    // Security: Sanitize input to prevent Directory Traversal
+    $requested_file = basename($_GET['edit']);
+    $target_path = 'templates/' . $requested_file;
+
+    // Check if file exists and follows naming convention
+    if (file_exists($target_path) && strpos($requested_file, 'signature_') === 0) {
+        $current_file = $requested_file;
+        $current_content = file_get_contents($target_path);
+        
+        // Generate a nice name from the filename
+        $pretty_name = str_replace(['signature_', '.html'], '', $requested_file);
+        $pretty_name = str_replace('_', ' ', $pretty_name);
+        $current_name = ucwords($pretty_name);
+    } else {
+        $error = "Template not found or invalid filename.";
     }
 }
 ?>
@@ -143,7 +165,7 @@ if ($template_files) {
         .alert-success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
         .alert-error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
 
-        /* --- NEW COMPACT TOOLBAR GRID --- */
+        /* --- COMPACT TOOLBAR GRID --- */
         .editor-toolbar-grid {
             display: grid;
             grid-template-columns: 1fr 1fr auto;
@@ -294,15 +316,11 @@ if ($template_files) {
                 height: 450,
                 width: '100%',
                 theme: 'default',
-                
-                // --- STRICT SECURITY SETTINGS ---
                 useAceEditor: false,
                 sourceEditor: 'area',
                 beautifyHTML: false,
                 sourceEditorCDN: null,
                 source: false,
-                // --------------------------------
-
                 toolbar: true,
                 toolbarButtonSize: 'middle',
                 buttons: [
@@ -342,9 +360,9 @@ if ($template_files) {
         }
     }
     
+    // JS Load Function (for Dropdown)
     function loadTemplate(filename) {
         if (!filename) {
-            // Reset to new state
             document.getElementById('template_name').value = '';
             document.getElementById('existing_file').value = '';
             document.getElementById('saveExistingBtn').disabled = true;
@@ -352,7 +370,6 @@ if ($template_files) {
             return;
         }
         
-        // Securely fetch template content via JS
         fetch('load_template.php?file=' + encodeURIComponent(filename))
             .then(response => {
                 if(!response.ok) throw new Error('Failed to load');
@@ -362,7 +379,6 @@ if ($template_files) {
                 if (editorInstance) editorInstance.value = content;
                 else document.getElementById('template_content').value = content;
                 
-                // Pretty name from filename
                 var displayName = filename.replace('signature_', '').replace('.html', '');
                 displayName = displayName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
                 
@@ -384,7 +400,6 @@ if ($template_files) {
     
     function updatePreview() {
         var content = editorInstance ? editorInstance.value : document.getElementById('template_content').value;
-        // Simple client-side replacement for preview
         var preview = content
             .replace(/{{NAME}}/g, 'John Doe')
             .replace(/{{ROLE}}/g, 'Senior Developer')
@@ -401,7 +416,6 @@ if ($template_files) {
         }
     }
 
-    // Client-side validation
     document.getElementById('editorForm').addEventListener('submit', function(e) {
         if(!document.getElementById('template_name').value.trim()) {
             e.preventDefault();
