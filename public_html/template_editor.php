@@ -117,14 +117,14 @@ if ($template_files) {
 }
 
 // ---------------------------------------------------------------------
-// 4. HANDLE GET REQUEST (FIX: Load template for editing)
+// 4. HANDLE GET REQUEST (Load via ?edit=...)
 // ---------------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
     // Security: Sanitize input to prevent Directory Traversal
     $requested_file = basename($_GET['edit']);
-    $target_path = 'templates/' . $requested_file;
+    $target_path = __DIR__ . '/templates/' . $requested_file;
 
-    // Check if file exists and follows naming convention
+    // Security Check: File must exist and start with signature_
     if (file_exists($target_path) && strpos($requested_file, 'signature_') === 0) {
         $current_file = $requested_file;
         $current_content = file_get_contents($target_path);
@@ -147,8 +147,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
     
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/all.min.css">    
+    
     <link rel="stylesheet" href="js/jodit/jodit.min.css">
+    
     <script src="js/jodit/jodit.min.js"></script>
+
+    <script src="js/ace/ace.js"></script> 
     
     <style>
         .jodit-container { border-radius: 8px !important; border: 1px solid var(--border) !important; }
@@ -165,7 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
         .alert-success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
         .alert-error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
 
-        /* --- COMPACT TOOLBAR GRID --- */
+        /* COMPACT TOOLBAR GRID */
         .editor-toolbar-grid {
             display: grid;
             grid-template-columns: 1fr 1fr auto;
@@ -316,10 +320,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
                 height: 450,
                 width: '100%',
                 theme: 'default',
-                useAceEditor: false,
-                sourceEditor: 'area',
+                
+                // --- CONFIG FOR LOCAL ACE EDITOR ---
+                useAceEditor: true,
+                sourceEditor: 'ace',
+                // Zeige auf die lokale Ace Datei. Jodit lädt dann Theme/Mode relativ dazu
+                sourceEditorCDNUrlsJS: ['js/ace/ace.js'], 
+                // -----------------------------------
+
+                sourceEditorNativeOptions: {
+                    theme: 'ace/theme/chrome', // Theme Name (muss in js/ace/ liegen)
+                    mode: 'ace/mode/html',     // Mode Name (muss in js/ace/ liegen)
+                    showGutter: true,
+                    wrap: true
+                },
+
                 beautifyHTML: false,
-                sourceEditorCDN: null,
                 source: false,
                 toolbar: true,
                 toolbarButtonSize: 'middle',
@@ -334,7 +350,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
                 ],
                 allowResizeX: false,
                 allowResizeY: true,
-                spellcheck: false,
                 cleanHTML: {
                     fillEmptyParagraph: false,
                     denyTags: 'script,iframe,object,embed'
