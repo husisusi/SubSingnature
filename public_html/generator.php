@@ -1,10 +1,14 @@
 <?php
+// generator.php
+
 require_once 'includes/config.php';
 requireLogin();
 
+// ---------------------------------------------------------------------
 // 1. SECURITY & BACKEND LOGIC
 // ---------------------------------------------------------------------
-// CSRF Token generieren
+
+// Generate CSRF Token if not exists
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
@@ -12,19 +16,37 @@ if (empty($_SESSION['csrf_token'])) {
 $user_id = $_SESSION['user_id'];
 $message = '';
 
-// Standardwerte laden (aus Session oder Nutzerprofil)
+// Load form data from session (if available)
 $formData = $_SESSION['form_data'] ?? [];
+
+// ---------------------------------------------------------------------
+// FIX: DEFAULT TEMPLATE LOGIC
+// ---------------------------------------------------------------------
+// 1. Determine System Default (set by Admin)
+$configFile = __DIR__ . '/templates/default_config.txt';
+$systemDefault = file_exists($configFile) ? trim(file_get_contents($configFile)) : 'signature_default.html';
+
+// 2. Determine which template to show
+// If POST (User clicked Save): Use the user's selection
+// If GET (Page Load): FORCE the system default to ensure Admin setting applies
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $defaultTemplate = $formData['template'] ?? $systemDefault;
+} else {
+    $defaultTemplate = $systemDefault;
+    
+    // Optional: Reset session template to avoid confusion later
+    if (isset($_SESSION['form_data'])) {
+        $_SESSION['form_data']['template'] = $systemDefault;
+    }
+}
+
+// Load other default values
 $defaultName = $formData['name'] ?? $_SESSION['full_name'] ?? '';
 $defaultEmail = $formData['email'] ?? $_SESSION['email'] ?? '';
 $defaultRole = $formData['role'] ?? '';
 $defaultPhone = $formData['phone'] ?? '';
-// Check for custom default config
-$configFile = __DIR__ . '/templates/default_config.txt';
-$systemDefault = file_exists($configFile) ? trim(file_get_contents($configFile)) : 'signature_default.html';
 
-$defaultTemplate = $formData['template'] ?? $systemDefault;
-
-// Templates JavaScript load (Live Preview)
+// Load Templates for JavaScript (Live Preview)
 $templatesJS = [];
 $templatesDir = __DIR__ . '/templates';
 $template_files_glob = glob($templatesDir . '/*.html');
@@ -35,13 +57,16 @@ if ($template_files_glob) {
     }
 }
 
+// ---------------------------------------------------------------------
 // SEARCH & PAGINATION
+// ---------------------------------------------------------------------
 $search = trim($_GET['search'] ?? '');
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 if ($page < 1) $page = 1;
 $limit = 25; 
 $offset = ($page - 1) * $limit;
 
+// Prepare SQL Query
 $whereSQL = "WHERE user_id = :uid";
 $params = [':uid' => $user_id];
 
@@ -50,6 +75,7 @@ if (!empty($search)) {
     $params[':search'] = '%' . $search . '%';
 }
 
+// Count total records
 $countSql = "SELECT COUNT(*) as total FROM user_signatures $whereSQL";
 $stmt = $db->prepare($countSql);
 foreach ($params as $key => $val) {
@@ -59,6 +85,7 @@ $totalResult = $stmt->execute();
 $totalSignatures = $totalResult->fetchArray(SQLITE3_ASSOC)['total'];
 $totalPages = ceil($totalSignatures / $limit);
 
+// Fetch records
 $dataSql = "SELECT * FROM user_signatures $whereSQL ORDER BY created_at DESC LIMIT :limit OFFSET :offset";
 $stmt = $db->prepare($dataSql);
 foreach ($params as $key => $val) {
@@ -73,14 +100,16 @@ while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
     $signatures[] = $row;
 }
 
-// FORMULAR AKTIONEN (Speichern / Löschen)
+// ---------------------------------------------------------------------
+// HANDLE FORM ACTIONS (SAVE / DELETE)
+// ---------------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // CSRF Prüfung (Prio 1 Security)
+    // Security: Validate CSRF Token
     if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
         die("Security Error: Invalid CSRF Token");
     }
 
-    // Speichern
+    // Action: Save Signature
     if (isset($_POST['action']) && $_POST['action'] === 'save') {
         $name = trim($_POST['name'] ?? '');
         $role = trim($_POST['role'] ?? '');
@@ -88,6 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $phone = trim($_POST['phone'] ?? '');
         $template = trim($_POST['template'] ?? '');
 
+        // Security: Use Prepared Statements to prevent SQL Injection
         $stmt = $db->prepare("INSERT INTO user_signatures (user_id, name, role, email, phone, template) VALUES (?, ?, ?, ?, ?, ?)");
         $stmt->bindValue(1, $user_id, SQLITE3_INTEGER);
         $stmt->bindValue(2, $name, SQLITE3_TEXT);
@@ -102,7 +132,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
     
-    // Alles löschen
+    // Action: Delete All
     if (isset($_POST['action']) && $_POST['action'] === 'delete_all') {
         $stmt = $db->prepare("DELETE FROM user_signatures WHERE user_id = ?");
         $stmt->bindValue(1, $user_id, SQLITE3_INTEGER);
@@ -112,12 +142,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// Handle Success Messages
 if (isset($_GET['success'])) {
     if ($_GET['success'] == 'deleted') $message = "All signatures deleted successfully!";
     else $message = "Signature saved successfully!";
 }
 
-// Templates Liste für PHP (Dropdown)
+// Load Templates List (PHP Dropdown)
 $templates = [];
 $template_files = glob('templates/*.html');
 if ($template_files) {
@@ -413,6 +444,7 @@ if ($template_files) {
 
     <script>
         // 1. LIVE PREVIEW LOGIC
+        // Inject Templates from PHP
         const rawTemplates = <?php echo json_encode($templatesJS); ?>;
 
         const inputs = {
@@ -428,6 +460,7 @@ if ($template_files) {
             const selectedFile = inputs.template.value;
             let html = rawTemplates[selectedFile] || '<p style="color:#cbd5e1; text-align:center; padding:20px;">Template not found</p>';
 
+            // Replace Placeholders
             html = html.replace(/{{NAME}}/g, inputs.name.value || 'Your Name');
             html = html.replace(/{{ROLE}}/g, inputs.role.value || 'Job Title');
             html = html.replace(/{{EMAIL}}/g, inputs.email.value || 'email@example.com');
@@ -438,6 +471,7 @@ if ($template_files) {
             renderArea.innerHTML = html;
         }
 
+        // Add Listeners
         Object.values(inputs).forEach(input => {
             if(input) {
                 input.addEventListener('input', renderSignature);
@@ -446,12 +480,15 @@ if ($template_files) {
         });
 
         // 2. STORAGE LOGIC
+        // Saves current input to session storage for convenience
         function saveToStorage() {
             const data = {
                 name: inputs.name.value,
                 role: inputs.role.value,
                 email: inputs.email.value,
                 phone: inputs.phone.value,
+                // We also save the template, but we will not load it automatically on start 
+                // to respect the admin default.
                 template: inputs.template.value
             };
             sessionStorage.setItem('sig_form_data', JSON.stringify(data));
@@ -459,6 +496,7 @@ if ($template_files) {
 
         function loadFromStorage() {
             const roleInput = document.getElementById('inp_role');
+            // Only load if the form seems empty
             if (roleInput && roleInput.value === '' && sessionStorage.getItem('sig_form_data')) {
                 try {
                     const data = JSON.parse(sessionStorage.getItem('sig_form_data'));
@@ -466,13 +504,18 @@ if ($template_files) {
                     if(data.role) inputs.role.value = data.role;
                     if(data.email) inputs.email.value = data.email;
                     if(data.phone) inputs.phone.value = data.phone;
-                    if(data.template) inputs.template.value = data.template;
+                    
+                    // FIX: Do not load template from browser storage to ensure Admin Default applies on reload
+                    // if(data.template) inputs.template.value = data.template;
                 } catch(e) {}
             }
+            // Trigger initial render
             renderSignature();
         }
 
         document.addEventListener('DOMContentLoaded', loadFromStorage);
+        // Save whenever inputs change
+        document.getElementById('signatureForm').addEventListener('input', saveToStorage);
 
         // 3. MODAL LOGIC (FIXED SPACING)
         const modal = document.getElementById('previewModal');
@@ -481,7 +524,7 @@ if ($template_files) {
         function openModal(id) {
             const source = document.getElementById('source-' + id);
             if (source) {
-                // CSS Reset injected directly into iframe source
+                // CSS Reset injected directly into iframe source to fix large spacing issues
                 const styleReset = `
                     <style>
                         body { margin: 0; padding: 20px; font-family: Arial, Helvetica, sans-serif; background-color: #ffffff; }
