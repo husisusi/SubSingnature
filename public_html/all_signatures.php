@@ -8,11 +8,11 @@ requireLogin();
 // 1. HELPER FUNCTION: RENDER ITEM
 // ---------------------------------------------------------
 function renderSignatureItem($sig, $target_user_id, $search, $show_owner_name = false) {
-    // Template path determination
+    // Template Pfad bestimmen
     $tplPath = 'templates/' . basename($sig['template']);
     $encodedHtml = "";
     
-    // Load Template
+    // Template laden und Platzhalter ersetzen
     if (file_exists($tplPath)) {
         $rawTpl = file_get_contents($tplPath);
         $previewHtml = str_replace(
@@ -25,6 +25,7 @@ function renderSignatureItem($sig, $target_user_id, $search, $show_owner_name = 
             ],
             $rawTpl
         );
+        // HTML sicher encodieren für das versteckte Feld
         $encodedHtml = htmlspecialchars($previewHtml, ENT_QUOTES, 'UTF-8');
     }
     
@@ -51,7 +52,9 @@ function renderSignatureItem($sig, $target_user_id, $search, $show_owner_name = 
             
             <div class="sig-actions" style="display:flex; gap:0.5rem; align-items:center;">
                 <?php if($encodedHtml): ?>
-                <button onclick="togglePreview(<?php echo $sig['id']; ?>)" class="btn btn-sm btn-secondary" title="Show Preview" style="background:white; border:1px solid #e2e8f0;">
+                <textarea id="source-<?php echo $sig['id']; ?>" class="visually-hidden"><?php echo $encodedHtml; ?></textarea>
+                
+                <button onclick="openModal(<?php echo $sig['id']; ?>)" class="btn btn-sm btn-secondary" title="Preview Signature" style="background:white; border:1px solid #e2e8f0;">
                     <i class="fas fa-eye"></i>
                 </button>
                 <?php endif; ?>
@@ -67,16 +70,7 @@ function renderSignatureItem($sig, $target_user_id, $search, $show_owner_name = 
                 </a>
             </div>
         </div>
-
-        <div id="preview-<?php echo $sig['id']; ?>" class="sig-preview-container">
-            <div style="margin-bottom:5px; font-size:0.75rem; color:#64748b; font-weight:700; text-transform:uppercase;">HTML Preview</div>
-            <?php if ($encodedHtml): ?>
-                <iframe class="preview-iframe" sandbox="allow-same-origin" srcdoc="<?php echo $encodedHtml; ?>"></iframe>
-            <?php else: ?>
-                <div style="color:red; font-size:0.9rem;">Template file not found.</div>
-            <?php endif; ?>
         </div>
-    </div>
     <?php
 }
 // ---------------------------------------------------------
@@ -215,7 +209,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' || isset($_GET['delete'])) {
         
         if ($target_user_id === 'all') {
             // ADMIN MODE: DELETE EVERYTHING FROM DB
-            if (!$is_admin) die("Unauthorized"); // Extra check
+            if (!$is_admin) die("Unauthorized"); 
             
             $stmtDel = $db->prepare("DELETE FROM user_signatures");
             $stmtDel->execute();
@@ -246,53 +240,49 @@ if (isset($_GET['success'])) {
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/all.min.css">
     <style>
+        .visually-hidden { position: absolute; left: -9999px; opacity: 0; }
         .alert { padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; display: flex; gap: 0.75rem; align-items: center; }
         .alert-success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
         .empty-state { text-align: center; padding: 4rem 1rem; color: #94a3b8; }
         .empty-icon { font-size: 3rem; margin-bottom: 1rem; opacity: 0.5; }
-        .sig-preview-container { display: none; margin-top: 1rem; border: 1px dashed #e2e8f0; background: #f8fafc; padding: 10px; border-radius: 8px; width: 100%; }
-        .preview-iframe { width: 100%; height: 180px; border: none; background: white; border-radius: 4px; }
-        .filter-bar { background: white; padding: 1rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
         
-        /* MODERN SELECT STYLE */
+        /* Modal Styles (Genau wie im Generator Script) */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 9999;
+            display: none; justify-content: center; align-items: center;
+            backdrop-filter: blur(3px);
+        }
+        .modal-box {
+            background: white; width: 90%; max-width: 700px;
+            border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);
+            overflow: hidden; animation: popIn 0.2s ease-out; display: flex; flex-direction: column;
+        }
+        @keyframes popIn { from {transform: scale(0.95); opacity: 0;} to {transform: scale(1); opacity: 1;} }
+        .modal-header { padding: 1rem 1.5rem; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; background: #f8fafc; }
+        .modal-body { padding: 0; height: 350px; background: white; position: relative; }
+        .modal-iframe { width: 100%; height: 100%; border: none; display: block; }
+        .modal-footer { padding: 1rem; text-align: right; border-top: 1px solid #e2e8f0; background: #f8fafc; }
+        .close-modal-btn { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #64748b; }
+        .close-modal-btn:hover { color: #ef4444; }
+
+        /* Filter & Search */
+        .filter-bar { background: white; padding: 1rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
         .user-select {
-            padding: 0.6rem 2rem 0.6rem 0.8rem; /* Platz rechts für Pfeil */
-            border: 1px solid #e2e8f0;
-            border-radius: 6px;
-            min-width: 200px;
-            font-weight: 500;
-            background-color: white; /* Weißer Hintergrund */
-            color: #334155;
-            font-size: 0.95rem;
-            cursor: pointer;
-            
-            /* Custom Arrow */
-            appearance: none; /* Standard Browser Styling entfernen */
-            -webkit-appearance: none;
-            -moz-appearance: none;
+            padding: 0.6rem 2rem 0.6rem 0.8rem;
+            border: 1px solid #e2e8f0; border-radius: 6px; min-width: 200px;
+            font-weight: 500; background-color: white; color: #334155; font-size: 0.95rem; cursor: pointer;
+            appearance: none; -webkit-appearance: none;
             background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
-            background-repeat: no-repeat;
-            background-position: right 0.7rem center;
-            background-size: 1em;
-            
-            transition: all 0.2s ease;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            background-repeat: no-repeat; background-position: right 0.7rem center; background-size: 1em;
+            transition: all 0.2s ease; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
         }
-
-        .user-select:hover {
-            border-color: #cbd5e1;
-        }
-
-        .user-select:focus {
-            outline: none;
-            border-color: var(--primary); /* Nutzt deine Primärfarbe */
-            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-        }
-
+        .user-select:hover { border-color: #cbd5e1; }
+        .user-select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
         .search-input { flex: 1; padding: 0.6rem; border: 1px solid #e2e8f0; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
         .search-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
-        
         .count-badge { background-color: #eff6ff; color: #2563eb; font-size: 0.9rem; padding: 0.3rem 0.8rem; border-radius: 999px; font-weight: 700; margin-left: 10px; border: 1px solid #dbeafe; vertical-align: middle; }
+        
         .infinite-spinner { text-align: center; padding: 2rem; display: none; color: var(--text-muted); }
         #sentinel { height: 20px; width: 100%; }
         .end-of-results { text-align: center; padding: 2rem; display: none; color: #94a3b8; font-size: 0.9rem; font-style: italic; }
@@ -345,7 +335,7 @@ if (isset($_GET['success'])) {
                 
                 <?php if (!empty($signatures) && empty($search)): ?>
                     <button onclick="confirmDeleteAll()" class="btn btn-sm btn-danger">
-                        <i class="fas fa-trash-alt"></i> Delete All displayed
+                        <i class="fas fa-trash-alt"></i> Delete All
                     </button>
                 <?php endif; ?>
             </div>
@@ -407,19 +397,62 @@ if (isset($_GET['success'])) {
 
     </main>
 
+    <div id="previewModal" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3 style="margin:0"><i class="fas fa-eye" style="color:var(--primary)"></i> Preview</h3>
+                <button class="close-modal-btn" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <iframe id="modalFrame" class="modal-iframe" sandbox="allow-same-origin"></iframe>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-sm btn-secondary" onclick="closeModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <form id="deleteAllForm" method="POST" action="all_signatures.php?user_id=<?php echo $target_user_id; ?>" style="display:none;">
         <input type="hidden" name="action" value="delete_all">
         <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
     </form>
 
     <script>
-        function togglePreview(id) {
-            const el = document.getElementById('preview-' + id);
-            const icon = el.parentElement.querySelector('.btn-secondary i');
-            el.style.display = (el.style.display === 'block') ? 'none' : 'block';
-            icon.className = (el.style.display === 'block') ? 'fas fa-eye-slash' : 'fas fa-eye';
+        // --- MODAL LOGIC WITH CSS RESET ---
+        const modal = document.getElementById('previewModal');
+        const modalFrame = document.getElementById('modalFrame');
+
+        function openModal(id) {
+            const source = document.getElementById('source-' + id);
+            if (source) {
+                // Der wichtige CSS Reset Fix, damit es kompakt aussieht
+                const styleReset = `
+                    <style>
+                        body { margin: 0; padding: 20px; font-family: Arial, Helvetica, sans-serif; background-color: #ffffff; }
+                        p { margin: 0; padding: 0; line-height: 1.4; } 
+                        table { border-collapse: collapse; border-spacing: 0; }
+                        td { padding: 0; vertical-align: top; }
+                        a { text-decoration: none; color: inherit; }
+                    </style>
+                `;
+                
+                modalFrame.srcdoc = styleReset + source.value;
+                modal.style.display = 'flex';
+            }
+        }
+
+        function closeModal() {
+            modal.style.display = 'none';
+            modalFrame.srcdoc = '';
+        }
+
+        window.onclick = function(event) {
+            if (event.target == modal) {
+                closeModal();
+            }
         }
         
+        // --- DELETE LOGIC ---
         function confirmDeleteAll() {
             var warning = 'Are you sure you want to delete ALL signatures displayed?';
             <?php if($target_user_id === 'all'): ?>
@@ -431,6 +464,7 @@ if (isset($_GET['success'])) {
             }
         }
 
+        // --- INFINITE SCROLL ---
         document.addEventListener('DOMContentLoaded', function() {
             let currentPage = 1;
             let isLoading = false;
