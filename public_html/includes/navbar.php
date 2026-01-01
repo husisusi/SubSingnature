@@ -26,11 +26,11 @@ $current_page = basename($_SERVER['PHP_SELF']);
     <span class="nav-label" style="font-weight: 800; color: #334155;">Data</span>
     
     <a href="csv_import.php" class="nav-link <?php echo ($current_page == 'csv_import.php') ? 'active' : ''; ?>">
-        <i class="fas fa-file-import"></i> <span>Import CSV</span>
+        <i class="fas fa-file-import"></i> <span>Import</span>
     </a>
     
     <a href="export_signatures.php" class="nav-link <?php echo ($current_page == 'export_signatures.php') ? 'active' : ''; ?>">
-        <i class="fas fa-file-export"></i> <span>Export CSV</span>
+        <i class="fas fa-file-export"></i> <span>Export</span>
     </a>
 
     <?php if (isAdmin()): ?>
