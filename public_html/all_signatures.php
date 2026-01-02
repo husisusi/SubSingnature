@@ -26,7 +26,7 @@ function renderSignatureItem($sig, $target_user_id, $search, $show_owner_name = 
         $encodedHtml = htmlspecialchars($previewHtml, ENT_QUOTES, 'UTF-8');
     }
 
-    // CSRF Token für Links
+    // CSRF Token for Links
     $csrf = $_SESSION['csrf_token'];
     ?>
     <div class="signature-item" style="flex-wrap: nowrap; gap: 15px;">
@@ -72,7 +72,7 @@ function renderSignatureItem($sig, $target_user_id, $search, $show_owner_name = 
 // ---------------------------------------------------------
 if (empty($_SESSION['csrf_token'])) $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 $current_user_id = $_SESSION['user_id'];
-$is_admin = isAdmin(); // Wichtig für die Button-Anzeige später
+$is_admin = isAdmin(); 
 $message = '';
 
 // User Select Logic
@@ -364,7 +364,7 @@ if (isset($_GET['success'])) {
             <h3 style="margin:0"><i class="fas fa-paper-plane"></i> Sending Emails...</h3>
         </div>
         <div class="modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 15px; height: auto;">
-            <div style="width: 100%; background-color: #f1f5f9; border-radius: 99px; overflow: hidden; height: 20px;">
+            <div style="width: 100%; background-color: #e2e8f0; border-radius: 99px; overflow: hidden; height: 20px;">
                 <div id="progressBarFill" style="width: 0%; height: 100%; background-color: #3b82f6; transition: width 0.3s ease;"></div>
             </div>
             <div style="display: flex; justify-content: space-between; font-size: 0.9rem; color: #64748b;">
@@ -372,11 +372,15 @@ if (isset($_GET['success'])) {
                 <span id="progressPercent">0%</span>
             </div>
 
-            <div id="progressLog" style="flex-grow: 1; background: #1e293b; color: #22c55e; font-family: monospace; font-size: 0.85rem; padding: 10px; border-radius: 6px; overflow-y: auto; max-height: 150px; border: 1px solid #cbd5e1;">
+            <div id="progressLog" style="flex-grow: 1; background: #ffffff; color: #334155; font-family: monospace; font-size: 0.85rem; padding: 10px; border-radius: 6px; overflow-y: auto; max-height: 150px; border: 1px solid #cbd5e1; box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);">
                 <div>> Ready to start...</div>
             </div>
         </div>
-        <div class="modal-footer">
+        <div class="modal-footer" style="display:flex; justify-content:space-between;">
+             <button id="btnCancelProgress" class="btn btn-sm btn-danger" onclick="cancelBulkEmail()">
+                <i class="fas fa-stop-circle"></i> Cancel
+            </button>
+            
             <button id="btnCloseProgress" class="btn btn-sm btn-secondary btn-disabled" onclick="closeProgressModal()">Close</button>
         </div>
     </div>
@@ -394,6 +398,7 @@ if (isset($_GET['success'])) {
 
 <script>
 const CSRF_TOKEN = "<?php echo $_SESSION['csrf_token']; ?>";
+let abortController = null; // Globale Variable für Abbruch
 
 // --- BUTTON ENABLE/DISABLE LOGIC ---
 function updateBulkButtons() {
@@ -403,7 +408,6 @@ function updateBulkButtons() {
     const btnSend = document.getElementById('btnSendSelected');
     const btnDel = document.getElementById('btnDeleteSelected');
 
-    // Button Send Logic (Admin only)
     if (btnSend) {
         if (selectedCount > 0) {
             btnSend.classList.remove('btn-disabled');
@@ -414,7 +418,6 @@ function updateBulkButtons() {
         }
     }
 
-    // Button Delete Logic
     if (btnDel) {
         if (selectedCount > 0) {
             btnDel.classList.remove('btn-disabled');
@@ -457,7 +460,7 @@ function deleteSelectedItems() {
     form.submit();
 }
 
-// --- SEND MAIL (ADMIN) - NEW LIVE VERSION (STREAMING) ---
+// --- SEND MAIL WITH LIVE STREAM & ABORT ---
 async function sendBulkEmail() {
     const checkboxes = document.querySelectorAll('.sig-checkbox:not(#selectAll):checked');
     const ids = Array.from(checkboxes).map(cb => cb.value);
@@ -465,31 +468,41 @@ async function sendBulkEmail() {
     if (ids.length === 0) return;
     if (!confirm(`Start sending emails to ${ids.length} users?`)) return;
 
-    // 1. Show Progress Modal
+    // 1. UI Reset
     const pModal = document.getElementById('progressModal');
     const pBar = document.getElementById('progressBarFill');
     const pText = document.getElementById('progressText');
     const pPercent = document.getElementById('progressPercent');
     const pLog = document.getElementById('progressLog');
     const btnClose = document.getElementById('btnCloseProgress');
+    const btnCancel = document.getElementById('btnCancelProgress');
 
     pModal.style.display = 'flex';
     pBar.style.width = '0%';
     pText.innerText = `0 of ${ids.length}`;
     pPercent.innerText = '0%';
     pLog.innerHTML = '<div>> Connecting to server...</div>';
-    btnClose.classList.add('btn-disabled'); // Disable close until done
+    
+    // Buttons status
+    btnClose.classList.add('btn-disabled'); 
+    btnCancel.classList.remove('btn-disabled');
+    btnCancel.innerHTML = '<i class="fas fa-stop-circle"></i> Cancel';
+    btnCancel.disabled = false;
 
-    // 2. Prepare Data
+    // 2. Prepare Data & Abort Controller
+    abortController = new AbortController(); 
+    const signal = abortController.signal;
+
     const formData = new FormData();
     formData.append('csrf_token', CSRF_TOKEN);
     ids.forEach(id => formData.append('ids[]', id));
 
     try {
-        // 3. Start Fetch Stream
+        // 3. Start Fetch mit 'signal'
         const response = await fetch('send_signature.php', {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: signal 
         });
 
         if (!response.ok) throw new Error("Network error");
@@ -498,14 +511,13 @@ async function sendBulkEmail() {
         const decoder = new TextDecoder("utf-8");
         let buffer = '';
 
-        // 4. Read Loop
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
             buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n\n'); // SSE events are split by double newline
-            buffer = lines.pop(); // Keep partial line for next chunk
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop();
 
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
@@ -513,40 +525,17 @@ async function sendBulkEmail() {
                     try {
                         const data = JSON.parse(jsonStr);
                         
-                        // Handle "Finished"
                         if (data.status === 'finished') {
-                            const logEntry = document.createElement('div');
-                            logEntry.style.color = '#fff';
-                            logEntry.style.fontWeight = 'bold';
-                            logEntry.innerText = `> ${data.summary}`;
-                            pLog.appendChild(logEntry);
-                            pLog.scrollTop = pLog.scrollHeight;
-                            
-                            // Enable Close Button
-                            btnClose.classList.remove('btn-disabled');
-                            btnClose.innerText = "Done (Close)";
-                            
-                            // Refresh logic on close
-                            btnClose.onclick = function() {
-                                closeProgressModal();
-                                window.location.reload(); // Refresh to update timestamps/logs
-                            };
-                        }
-                        // Handle "Fatal Error"
-                        else if (data.status === 'fatal_error') {
-                            pLog.innerHTML += `<div style="color:#ef4444;">> ERROR: ${data.message}</div>`;
-                            btnClose.classList.remove('btn-disabled');
-                        }
-                        // Handle Progress Updates
-                        else {
-                            // Update Log
-                            const logEntry = document.createElement('div');
-                            logEntry.innerText = `> ${data.message}`;
-                            if(data.status === 'error') logEntry.style.color = '#ef4444'; // Red
-                            pLog.appendChild(logEntry);
-                            pLog.scrollTop = pLog.scrollHeight;
+                            logMessage(`<b>DONE:</b> ${data.summary}`, '#166534'); // Grün-Dunkel
+                            finishProcess(true);
+                        } else if (data.status === 'fatal_error') {
+                            logMessage(`ERROR: ${data.message}`, '#dc2626'); // Rot
+                            finishProcess(false);
+                        } else {
+                            // Normaler Log Eintrag
+                            const color = (data.status === 'error') ? '#dc2626' : '#334155';
+                            logMessage(data.message, color);
 
-                            // Update Bar
                             if (data.progress) {
                                 const pct = Math.round((data.progress.current / data.progress.total) * 100);
                                 pBar.style.width = `${pct}%`;
@@ -554,20 +543,59 @@ async function sendBulkEmail() {
                                 pPercent.innerText = `${pct}%`;
                             }
                         }
-
-                    } catch (e) {
-                        console.error("JSON Parse Error", e);
-                    }
+                    } catch (e) { console.error(e); }
                 }
             }
         }
 
     } catch (e) {
-        pLog.innerHTML += `<div style="color:#ef4444;">> System Error: ${e.message}</div>`;
-        btnClose.classList.remove('btn-disabled');
-        btnClose.innerText = "Close (Error)";
-        btnClose.onclick = function() { closeProgressModal(); };
+        if (e.name === 'AbortError') {
+            logMessage('🛑 Process cancelled by user.', '#dc2626');
+            pLog.innerHTML += '<div>> Server has been instructed to stop.</div>';
+        } else {
+            logMessage(`System Error: ${e.message}`, '#dc2626');
+        }
+        finishProcess(false);
     }
+}
+
+function cancelBulkEmail() {
+    if (abortController) {
+        if(confirm("Are you sure you want to stop sending? Emails already sent cannot be recalled.")) {
+            abortController.abort(); // Triggert AbortError
+            
+            const btnCancel = document.getElementById('btnCancelProgress');
+            btnCancel.innerHTML = 'Stopping...';
+            btnCancel.classList.add('btn-disabled');
+        }
+    }
+}
+
+function logMessage(msg, color) {
+    const pLog = document.getElementById('progressLog');
+    const div = document.createElement('div');
+    div.innerHTML = `> ${msg}`;
+    div.style.color = color;
+    div.style.borderBottom = "1px solid #f1f5f9"; 
+    div.style.padding = "2px 0";
+    pLog.appendChild(div);
+    pLog.scrollTop = pLog.scrollHeight;
+}
+
+function finishProcess(success) {
+    const btnClose = document.getElementById('btnCloseProgress');
+    const btnCancel = document.getElementById('btnCancelProgress');
+    
+    btnClose.classList.remove('btn-disabled');
+    btnClose.innerText = "Done (Close)";
+    
+    btnCancel.classList.add('btn-disabled');
+    btnCancel.disabled = true;
+
+    btnClose.onclick = function() {
+        closeProgressModal();
+        window.location.reload(); 
+    };
 }
 
 // --- MODALS (PREVIEW & PROGRESS) ---
