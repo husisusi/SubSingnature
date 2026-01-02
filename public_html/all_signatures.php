@@ -214,15 +214,9 @@ if (isset($_GET['success'])) {
     .modal-iframe { width: 100%; height: 100%; border: none; display: block; }
     .modal-footer { padding: 1rem; text-align: right; border-top: 1px solid #e2e8f0; background: #f8fafc; }
 
-    /* FIX: Style für den "X" Button */
     .close-modal-btn { 
-        background: none; 
-        border: none; 
-        font-size: 1.5rem; 
-        cursor: pointer; 
-        color: #64748b; 
-        padding: 0 10px;
-        line-height: 1;
+        background: none; border: none; font-size: 1.5rem; 
+        cursor: pointer; color: #64748b; padding: 0 10px; line-height: 1;
     }
     .close-modal-btn:hover { color: #333; }
 
@@ -364,6 +358,30 @@ if (isset($_GET['success'])) {
     </div>
 </div>
 
+<div id="progressModal" class="modal-overlay" style="z-index: 10000;">
+    <div class="modal-box" style="max-width: 500px; height: auto; min-height: 250px;">
+        <div class="modal-header">
+            <h3 style="margin:0"><i class="fas fa-paper-plane"></i> Sending Emails...</h3>
+        </div>
+        <div class="modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 15px; height: auto;">
+            <div style="width: 100%; background-color: #f1f5f9; border-radius: 99px; overflow: hidden; height: 20px;">
+                <div id="progressBarFill" style="width: 0%; height: 100%; background-color: #3b82f6; transition: width 0.3s ease;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.9rem; color: #64748b;">
+                <span id="progressText">Initializing...</span>
+                <span id="progressPercent">0%</span>
+            </div>
+
+            <div id="progressLog" style="flex-grow: 1; background: #1e293b; color: #22c55e; font-family: monospace; font-size: 0.85rem; padding: 10px; border-radius: 6px; overflow-y: auto; max-height: 150px; border: 1px solid #cbd5e1;">
+                <div>> Ready to start...</div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button id="btnCloseProgress" class="btn btn-sm btn-secondary btn-disabled" onclick="closeProgressModal()">Close</button>
+        </div>
+    </div>
+</div>
+
 <form id="deleteAllForm" method="POST" action="all_signatures.php?user_id=<?php echo $target_user_id; ?>" style="display:none;">
     <input type="hidden" name="action" value="delete_all">
     <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
@@ -439,52 +457,126 @@ function deleteSelectedItems() {
     form.submit();
 }
 
-// --- SEND MAIL (ADMIN) ---
-function sendBulkEmail() {
+// --- SEND MAIL (ADMIN) - NEW LIVE VERSION (STREAMING) ---
+async function sendBulkEmail() {
     const checkboxes = document.querySelectorAll('.sig-checkbox:not(#selectAll):checked');
     const ids = Array.from(checkboxes).map(cb => cb.value);
+    
     if (ids.length === 0) return;
-    if (!confirm(`Send email to ${ids.length} users?`)) return;
+    if (!confirm(`Start sending emails to ${ids.length} users?`)) return;
 
-    const btn = document.getElementById('btnSendSelected');
-    const originalText = btn.innerHTML;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...';
-    btn.classList.add('btn-disabled');
+    // 1. Show Progress Modal
+    const pModal = document.getElementById('progressModal');
+    const pBar = document.getElementById('progressBarFill');
+    const pText = document.getElementById('progressText');
+    const pPercent = document.getElementById('progressPercent');
+    const pLog = document.getElementById('progressLog');
+    const btnClose = document.getElementById('btnCloseProgress');
 
+    pModal.style.display = 'flex';
+    pBar.style.width = '0%';
+    pText.innerText = `0 of ${ids.length}`;
+    pPercent.innerText = '0%';
+    pLog.innerHTML = '<div>> Connecting to server...</div>';
+    btnClose.classList.add('btn-disabled'); // Disable close until done
+
+    // 2. Prepare Data
     const formData = new FormData();
     formData.append('csrf_token', CSRF_TOKEN);
     ids.forEach(id => formData.append('ids[]', id));
 
-    fetch('send_signature.php', { method: 'POST', body: formData })
-    .then(r => r.json())
-    .then(data => {
-        btn.innerHTML = originalText;
-        btn.classList.remove('btn-disabled');
-        if (data.status === 'success') {
-            const s = data.data;
-            alert(`Result:\n✅ Sent: ${s.success}\n❌ Failed: ${s.failed}\n${s.details.join('\n')}`);
-            document.querySelectorAll('.sig-checkbox').forEach(cb => cb.checked = false);
-            document.getElementById('selectAll').checked = false;
-            updateBulkButtons();
-        } else {
-            alert('Error: ' + data.message);
+    try {
+        // 3. Start Fetch Stream
+        const response = await fetch('send_signature.php', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) throw new Error("Network error");
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = '';
+
+        // 4. Read Loop
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n\n'); // SSE events are split by double newline
+            buffer = lines.pop(); // Keep partial line for next chunk
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const jsonStr = line.replace('data: ', '').trim();
+                    try {
+                        const data = JSON.parse(jsonStr);
+                        
+                        // Handle "Finished"
+                        if (data.status === 'finished') {
+                            const logEntry = document.createElement('div');
+                            logEntry.style.color = '#fff';
+                            logEntry.style.fontWeight = 'bold';
+                            logEntry.innerText = `> ${data.summary}`;
+                            pLog.appendChild(logEntry);
+                            pLog.scrollTop = pLog.scrollHeight;
+                            
+                            // Enable Close Button
+                            btnClose.classList.remove('btn-disabled');
+                            btnClose.innerText = "Done (Close)";
+                            
+                            // Refresh logic on close
+                            btnClose.onclick = function() {
+                                closeProgressModal();
+                                window.location.reload(); // Refresh to update timestamps/logs
+                            };
+                        }
+                        // Handle "Fatal Error"
+                        else if (data.status === 'fatal_error') {
+                            pLog.innerHTML += `<div style="color:#ef4444;">> ERROR: ${data.message}</div>`;
+                            btnClose.classList.remove('btn-disabled');
+                        }
+                        // Handle Progress Updates
+                        else {
+                            // Update Log
+                            const logEntry = document.createElement('div');
+                            logEntry.innerText = `> ${data.message}`;
+                            if(data.status === 'error') logEntry.style.color = '#ef4444'; // Red
+                            pLog.appendChild(logEntry);
+                            pLog.scrollTop = pLog.scrollHeight;
+
+                            // Update Bar
+                            if (data.progress) {
+                                const pct = Math.round((data.progress.current / data.progress.total) * 100);
+                                pBar.style.width = `${pct}%`;
+                                pText.innerText = `${data.progress.current} of ${data.progress.total}`;
+                                pPercent.innerText = `${pct}%`;
+                            }
+                        }
+
+                    } catch (e) {
+                        console.error("JSON Parse Error", e);
+                    }
+                }
+            }
         }
-    })
-    .catch(e => {
-        btn.innerHTML = originalText;
-        btn.classList.remove('btn-disabled');
-        alert('System Error.');
-    });
+
+    } catch (e) {
+        pLog.innerHTML += `<div style="color:#ef4444;">> System Error: ${e.message}</div>`;
+        btnClose.classList.remove('btn-disabled');
+        btnClose.innerText = "Close (Error)";
+        btnClose.onclick = function() { closeProgressModal(); };
+    }
 }
 
-// --- MODAL ---
+// --- MODALS (PREVIEW & PROGRESS) ---
 const modal = document.getElementById('previewModal');
 const modalFrame = document.getElementById('modalFrame');
 
 function openModal(id) {
     const source = document.getElementById('source-' + id);
     if(source) {
-        // Exakter CSS Reset aus generator.php
         const styleReset = `
             <style>
                 body { margin: 0; padding: 20px; font-family: Arial, Helvetica, sans-serif; background-color: #ffffff; }
@@ -494,12 +586,12 @@ function openModal(id) {
                 a { text-decoration: none; color: inherit; }
             </style>
         `;
-        
         modalFrame.srcdoc = styleReset + source.value;
         modal.style.display = 'flex';
     }
 }
 function closeModal() { modal.style.display = 'none'; modalFrame.srcdoc=''; }
+function closeProgressModal() { document.getElementById('progressModal').style.display = 'none'; }
 window.onclick = e => { if(e.target == modal) closeModal(); }
 
 // --- DELETE ALL ---
