@@ -20,8 +20,10 @@ if (!isset($_SESSION['loggedin']) || $_SESSION['loggedin'] !== true) {
 $message = '';
 $error = '';
 
-// Default values
+// Variables for the editor state
 $current_name = '';
+$current_file = ''; 
+// Fallback content if no template exists at all
 $current_content = '<!DOCTYPE html>
 <html>
 <head>
@@ -36,13 +38,41 @@ $current_content = '<!DOCTYPE html>
 </div>
 </body>
 </html>';
-$current_file = ''; 
+
+// Define templates directory safely
+$templates_dir = __DIR__ . '/templates';
+if (!is_dir($templates_dir)) {
+    mkdir($templates_dir, 0755, true);
+}
 
 // ---------------------------------------------------------------------
-// 2. Handle POST Request (Save)
+// 2. Logic: Determine which file to load (Default vs. Edit vs. Post)
+// ---------------------------------------------------------------------
+
+// A. Check for System Default Template
+$default_config_file = $templates_dir . '/default_config.txt';
+$system_default_file = '';
+
+if (file_exists($default_config_file)) {
+    $read_default = trim(file_get_contents($default_config_file));
+    // SECURITY: Validate filename to prevent path traversal
+    $clean_default = basename($read_default);
+    if ($clean_default === $read_default && file_exists($templates_dir . '/' . $clean_default)) {
+        $system_default_file = $clean_default;
+    }
+}
+
+// B. Set initial state to System Default (if available)
+if (!empty($system_default_file)) {
+    $current_file = $system_default_file;
+}
+
+// ---------------------------------------------------------------------
+// 3. Handle POST Request (Save / Create)
 // ---------------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
+    // SECURITY: CSRF Check
     if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
         die("Security Error: Invalid CSRF Token.");
     }
@@ -51,20 +81,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $template_content = $_POST['template_content'] ?? '';
     $action = $_POST['action'] ?? '';
     
+    // Update variables so the form retains data on error
     $current_name = $template_name;
     $current_content = $template_content;
     
-    $templates_dir = __DIR__ . '/templates';
-    if (!is_dir($templates_dir)) {
-        mkdir($templates_dir, 0755, true);
-    }
-
     if (empty($template_name)) {
         $error = "Template name is required!";
     } elseif (empty($template_content)) {
         $error = "Template content is required!";
     } else {
+        // ACTION: CREATE NEW
         if ($action === 'save_new') {
+            // SECURITY: Sanitize filename (alphanumeric + underscore only)
             $clean_name = preg_replace('/[^a-z0-9_]/i', '_', $template_name);
             $filename = 'signature_' . strtolower($clean_name) . '.html';
             $filepath = $templates_dir . '/' . $filename;
@@ -74,26 +102,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 if (file_put_contents($filepath, $template_content) !== false) {
                     $message = "Template created: " . htmlspecialchars($filename);
-                    $current_file = $filename;
+                    $current_file = $filename; // Switch editor to new file
                 } else {
                     $error = "Could not write file. Check permissions.";
                 }
             }
         } 
+        // ACTION: UPDATE EXISTING
         elseif ($action === 'save_existing') {
             $existing_file = $_POST['existing_file'] ?? '';
             
             if (empty($existing_file)) {
                 $error = "No template selected for update!";
             } else {
+                // SECURITY: Prevent Directory Traversal
                 $safe_filename = basename($existing_file);
                 $filepath = $templates_dir . '/' . $safe_filename;
                 
-                // Security Check: Verify file really exists in templates dir
+                // SECURITY: Verify file exists and is strictly within templates dir
                 if (file_exists($filepath) && realpath($filepath) === realpath($templates_dir . '/' . $safe_filename)) {
                     if (file_put_contents($filepath, $template_content) !== false) {
                         $message = "Template updated: " . htmlspecialchars($safe_filename);
-                        $current_file = $safe_filename;
+                        $current_file = $safe_filename; // Keep editor on this file
                     } else {
                         $error = "Could not write file. Check permissions.";
                     }
@@ -106,35 +136,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ---------------------------------------------------------------------
-// 3. Load Existing Templates List
+// 4. Handle GET Request (Edit Mode or Default Load)
 // ---------------------------------------------------------------------
-$templates = [];
-$template_files = glob('templates/*.html');
-if ($template_files) {
-    foreach ($template_files as $file) {
-        $templates[basename($file)] = file_get_contents($file);
+
+// Check if user specifically requested a file via URL (?edit=...)
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
+    $requested_file = basename($_GET['edit']);
+    $target_path = $templates_dir . '/' . $requested_file;
+
+    // SECURITY: Validate file existence and naming convention
+    if (file_exists($target_path) && strpos($requested_file, 'signature_') === 0) {
+        $current_file = $requested_file;
+    } else {
+        $error = "Template not found or invalid filename.";
+        // Reset to empty if invalid
+        $current_file = ''; 
     }
 }
 
 // ---------------------------------------------------------------------
-// 4. HANDLE GET REQUEST (Load via ?edit=...)
+// 5. Final Content Loading
 // ---------------------------------------------------------------------
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
-    // Security: Sanitize input to prevent Directory Traversal
-    $requested_file = basename($_GET['edit']);
-    $target_path = __DIR__ . '/templates/' . $requested_file;
-
-    // Security Check: File must exist and start with signature_
-    if (file_exists($target_path) && strpos($requested_file, 'signature_') === 0) {
-        $current_file = $requested_file;
-        $current_content = file_get_contents($target_path);
+// Load content based on $current_file (which is now either Default, Edited, or Saved)
+if (!empty($current_file)) {
+    $load_path = $templates_dir . '/' . $current_file;
+    if (file_exists($load_path)) {
+        $current_content = file_get_contents($load_path);
         
-        // Generate a nice name from the filename
-        $pretty_name = str_replace(['signature_', '.html'], '', $requested_file);
+        // Generate a "pretty name" for the input field
+        $pretty_name = str_replace(['signature_', '.html'], '', $current_file);
         $pretty_name = str_replace('_', ' ', $pretty_name);
         $current_name = ucwords($pretty_name);
-    } else {
-        $error = "Template not found or invalid filename.";
+    }
+}
+
+// ---------------------------------------------------------------------
+// 6. Load Existing Templates List (for Dropdown)
+// ---------------------------------------------------------------------
+$templates = [];
+$template_files = glob($templates_dir . '/*.html');
+if ($template_files) {
+    foreach ($template_files as $file) {
+        $templates[basename($file)] = file_get_contents($file);
     }
 }
 ?>
@@ -149,9 +192,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
     <link rel="stylesheet" href="css/all.min.css">    
     
     <link rel="stylesheet" href="js/jodit/jodit.min.css">
-    
     <script src="js/jodit/jodit.min.js"></script>
-
     <script src="js/ace/ace.js"></script> 
     
     <style>
@@ -238,6 +279,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
                                     <?php foreach ($templates as $filename => $content): ?>
                                         <?php  
                                         $display_name = ucfirst(str_replace('_', ' ', str_replace(['signature_', '.html'], '', $filename)));
+                                        // Mark as selected if it matches current file (default or edited)
                                         $selected = ($filename === $current_file) ? 'selected' : '';
                                         ?>
                                         <option value="<?php echo htmlspecialchars($filename, ENT_QUOTES, 'UTF-8'); ?>" <?php echo $selected; ?>>
@@ -324,13 +366,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
                 // --- CONFIG FOR LOCAL ACE EDITOR ---
                 useAceEditor: true,
                 sourceEditor: 'ace',
-                // Zeige auf die lokale Ace Datei. Jodit lädt dann Theme/Mode relativ dazu
+                // Point to local Ace file
                 sourceEditorCDNUrlsJS: ['js/ace/ace.js'], 
                 // -----------------------------------
 
                 sourceEditorNativeOptions: {
-                    theme: 'ace/theme/chrome', // Theme Name (muss in js/ace/ liegen)
-                    mode: 'ace/mode/html',     // Mode Name (muss in js/ace/ liegen)
+                    theme: 'ace/theme/chrome',
+                    mode: 'ace/mode/html',
                     showGutter: true,
                     wrap: true
                 },
@@ -377,6 +419,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
     
     // JS Load Function (for Dropdown)
     function loadTemplate(filename) {
+        // If user selects "Create New", clear everything and load fallback default
         if (!filename) {
             document.getElementById('template_name').value = '';
             document.getElementById('existing_file').value = '';
@@ -394,6 +437,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
                 if (editorInstance) editorInstance.value = content;
                 else document.getElementById('template_content').value = content;
                 
+                // Pretty name generation
                 var displayName = filename.replace('signature_', '').replace('.html', '');
                 displayName = displayName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
                 
@@ -406,6 +450,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['edit'])) {
             .catch(err => alert('Error loading template: ' + err));
     }
     
+    // Resets content to a hardcoded simple fallback
     function loadDefaultTemplate() {
         var defaultTpl = '<!DOCTYPE html>\n<html>\n<head><meta charset="UTF-8"></head>\n<body>\n<div style="font-family: Arial;">\n{{NAME}} | {{ROLE}}\n</div>\n</body>\n</html>';
         if (editorInstance) editorInstance.value = defaultTpl;
