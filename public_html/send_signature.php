@@ -1,13 +1,16 @@
 <?php
 // send_signature.php
+// PRODUCTION READY - SECURITY PRIO 1
 
 require_once 'includes/config.php';
 require_once 'includes/MailHelper.php';
 
-// 1. SECURITY CHECKS
-requireAdmin();
+// ---------------------------------------------------------
+// 1. SECURITY & CONFIGURATION
+// ---------------------------------------------------------
+requireAdmin(); // Only Admins allowed
 
-// Disable buffering to ensure real-time streaming to the browser
+// Disable output buffering for Real-Time Streaming (SSE)
 if (function_exists('apache_setenv')) {
     @apache_setenv('no-gzip', 1);
 }
@@ -17,12 +20,14 @@ while (ob_get_level() > 0) {
     ob_end_clean();
 }
 
-// Set Headers for Server-Sent Events (SSE) behavior
+// Set Headers for Server-Sent Events
 header('Content-Type: text/event-stream');
 header('Cache-Control: no-cache');
 header('Connection: keep-alive');
 
+// ---------------------------------------------------------
 // 2. INPUT VALIDATION
+// ---------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendStreamResponse('fatal_error', 'Invalid request method.');
     exit;
@@ -41,18 +46,21 @@ if (empty($ids) || !is_array($ids)) {
     exit;
 }
 
-// 3. PERFORMANCE SETUP
 // Increase time limit for bulk sending (5 minutes)
 set_time_limit(300);
 
-// Initialize statistics
+// Initialize stats
 $total = count($ids);
 $successCount = 0;
 $failCount = 0;
 $processed = 0;
 
+// ---------------------------------------------------------
+// 3. HELPER FUNCTIONS
+// ---------------------------------------------------------
+
 /**
- * Helper: Send JSON chunk to browser
+ * Sends a JSON chunk to the browser for the progress bar.
  */
 function sendStreamResponse($status, $message, $progress = null) {
     $data = [
@@ -61,14 +69,34 @@ function sendStreamResponse($status, $message, $progress = null) {
         'progress' => $progress
     ];
     echo "data: " . json_encode($data) . "\n\n";
-    flush(); // Force output to browser immediately
+    flush(); 
 }
 
 /**
- * Helper: Secure Template Loading
+ * Loads the main email body template.
+ * Looks for 'templates/email_notification.html'.
+ * Falls back to a default string if missing.
+ */
+function getEmailBodyTemplate() {
+    $path = __DIR__ . '/templates/email_notification.html';
+    
+    // Security: Hardcoded path prevents directory traversal
+    if (file_exists($path)) {
+        return file_get_contents($path);
+    }
+    
+    // Fallback content
+    return "<p>Hello {{NAME}},</p>
+            <p>Your new signature is attached as <strong>{{ATTACHMENT_NAME}}</strong>.</p>
+            <hr>
+            {{PREVIEW}}";
+}
+
+/**
+ * Loads a signature template securely.
  */
 function getSecureTemplateContent($templateName) {
-    $cleanName = basename($templateName);
+    $cleanName = basename($templateName); // Security: Prevent traversal
     if (pathinfo($cleanName, PATHINFO_EXTENSION) !== 'html') {
         return '';
     }
@@ -77,8 +105,7 @@ function getSecureTemplateContent($templateName) {
 }
 
 /**
- * Helper: Create Safe Filename for Attachment
- * Example: "John Doe" + "template.html" -> "John_Doe_template.html"
+ * Creates a safe filename for the attachment.
  */
 function createSafeFilename($userName, $templateName) {
     $safeName = str_replace(' ', '_', $userName);
@@ -86,30 +113,38 @@ function createSafeFilename($userName, $templateName) {
     return $safeName . '_' . $templateName;
 }
 
-// 4. PROCESSING LOOP
+// ---------------------------------------------------------
+// 4. PREPARATION
+// ---------------------------------------------------------
+
+// Load the Email Body Template ONCE (Performance)
+$emailBodyTemplate = getEmailBodyTemplate();
+
+// ---------------------------------------------------------
+// 5. PROCESSING LOOP
+// ---------------------------------------------------------
+
 foreach ($ids as $sig_id) {
     
     // --- CRITICAL SECURITY: PANIC BUTTON CHECK ---
-    // If the user clicked "Stop" in the browser, the connection is dropped.
-    // We detect this and kill the script immediately.
+    // If user clicks "STOP IMMEDIATELY", browser closes connection.
+    // We detect this and exit the script instantly.
     if (connection_aborted()) {
-        // Optional: Log this event if needed
-        // error_log("Bulk send aborted by user.");
         exit; // Hard stop
     }
     
     $processed++;
-    $sig_id = (int)$sig_id;
+    $sig_id = (int)$sig_id; // Security: Force Integer
 
-    // Fetch Data
+    // Fetch User Data
     $stmt = $db->prepare("SELECT name, role, email, phone, template FROM user_signatures WHERE id = ?");
     $stmt->bindValue(1, $sig_id, SQLITE3_INTEGER);
     $res = $stmt->execute();
     $data = $res->fetchArray(SQLITE3_ASSOC);
 
-    // Progress State
     $progData = ['current' => $processed, 'total' => $total];
 
+    // Check if signature exists
     if (!$data) {
         $failCount++;
         sendStreamResponse('error', "ID $sig_id: Signature not found.", $progData);
@@ -130,11 +165,11 @@ foreach ($ids as $sig_id) {
         continue;
     }
 
-    // Load Template
+    // Load Signature HTML Template
     $rawHtml = getSecureTemplateContent($data['template']);
     if (empty($rawHtml)) {
         $failCount++;
-        $msg = "ID $sig_id: Template missing ($data[template])";
+        $msg = "ID $sig_id: Template file missing ($data[template])";
         
         // Log Error to DB
         $db->exec("INSERT INTO mail_logs (signature_id, recipient, status, message) VALUES ($sig_id, '$recipient', 'error', '$msg')");
@@ -143,8 +178,8 @@ foreach ($ids as $sig_id) {
         continue;
     }
 
-    // Replace Placeholders
-    $finalHtml = str_replace(
+    // Replace Placeholders in Signature HTML
+    $finalSigHtml = str_replace(
         ['{{NAME}}', '{{ROLE}}', '{{EMAIL}}', '{{PHONE}}'],
         [
             htmlspecialchars($data['name']), 
@@ -155,29 +190,40 @@ foreach ($ids as $sig_id) {
         $rawHtml
     );
 
-    // Prepare Dynamic Attachment Name
     $attachmentName = createSafeFilename($data['name'], $data['template']);
 
-    // Prepare Email Body
-    $subject = "Your New Email Signature";
-    $body  = "<p>Hello " . htmlspecialchars($data['name']) . ",</p>";
-    $body .= "<p>Your new signature is attached as <strong>" . htmlspecialchars($attachmentName) . "</strong>.</p>";
-    $body .= "<p>Please open the attachment in your browser, copy everything (Ctrl+A, Ctrl+C), and paste it into your email signature settings.</p>";
-    $body .= "<p>Best regards,</p>";
-    $body .= "<hr><h4>Preview:</h4>";
-    $body .= "<div style='border:1px dashed #ccc; padding:10px;'>" . $finalHtml . "</div>";
+    // ------------------------------------------------------------------
+    // BUILD EMAIL BODY
+    // ------------------------------------------------------------------
+    
+    // Create a visual preview block for the email body
+    $previewBlock = "<div style='border:1px dashed #ccc; padding:15px; margin-top:10px; background:#fff;'>" . $finalSigHtml . "</div>";
+    
+    // Inject data into the Email Body Template
+    $mailBody = str_replace(
+        ['{{NAME}}', '{{ATTACHMENT_NAME}}', '{{PREVIEW}}'],
+        [
+            htmlspecialchars($data['name']),
+            htmlspecialchars($attachmentName),
+            $previewBlock
+        ],
+        $emailBodyTemplate
+    );
 
+    $subject = "Your New Email Signature"; 
+    
+    // Prepare Attachment
     $attachments = [
         [
-            'content' => $finalHtml,
+            'content' => $finalSigHtml,
             'name'    => $attachmentName
         ]
     ];
 
-    // SEND MAIL
-    $sendResult = MailHelper::send($recipient, $subject, $body, '', false, $attachments);
+    // SEND MAIL via Helper
+    $sendResult = MailHelper::send($recipient, $subject, $mailBody, '', false, $attachments);
 
-    // LOG TO DATABASE
+    // LOG RESULT TO DATABASE
     $status = $sendResult['success'] ? 'success' : 'error';
     $logMsg = $db->escapeString($sendResult['message']);
     
@@ -192,16 +238,18 @@ foreach ($ids as $sig_id) {
         sendStreamResponse('error', "Failed: $recipient (" . $sendResult['message'] . ")", $progData);
     }
 
-    // THROTTLING (Anti-Spam)
+    // THROTTLING (Anti-Spam protection)
     // 0.5s pause per mail
     usleep(500000); 
-    // Every 10 mails, pause 2s
+    // Additional 2s pause every 10 mails
     if ($successCount > 0 && $successCount % 10 === 0) {
         sleep(2);
     }
 }
 
-// 5. CLEANUP & FINISH
+// ---------------------------------------------------------
+// 6. FINISH
+// ---------------------------------------------------------
 if (method_exists('MailHelper', 'closeConnection')) {
     MailHelper::closeConnection();
 }
